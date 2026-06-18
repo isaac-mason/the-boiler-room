@@ -1,0 +1,148 @@
+import { debug as ccDebug, type World } from 'crashcat';
+import * as THREE from 'three';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+export type DebugOverlay = {
+    element: HTMLDivElement;
+    text: HTMLDivElement;
+    /** Whether the text panel is shown (toggled with the backtick key). */
+    enabled: boolean;
+    /** Whether the physics wireframe is drawn (toggled by the checkbox). */
+    showPhysics: boolean;
+    /** Whether the navmesh wireframe is drawn (toggled by the checkbox). */
+    showNavMesh: boolean;
+    /** Line segments rendering the crashcat physics debug wireframe. Add to your scene. */
+    physicsLines: THREE.LineSegments;
+    /** Raycaster used for click-to-raycast against the scene. */
+    raycaster: THREE.Raycaster;
+    /** Marker placed at the last raycast hit point. Add to your scene. */
+    raycastMarker: THREE.Mesh;
+    /** World-space point of the last raycast hit, or null if nothing's been hit. */
+    lastHit: THREE.Vector3 | null;
+};
+
+function createCheckbox(label: string, onChange: (checked: boolean) => void): HTMLLabelElement {
+    const wrapper = document.createElement('label');
+    wrapper.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.addEventListener('change', () => onChange(input.checked));
+    wrapper.append(input, label);
+    return wrapper;
+}
+
+// Minimal debug overlay (plain DOM): a text panel showing the camera position
+// (toggle with the backtick `) plus checkboxes toggling debug wireframes.
+export function createDebugOverlay(): DebugOverlay {
+    const element = document.createElement('div');
+    element.style.cssText = [
+        'position:fixed',
+        'top:8px',
+        'left:8px',
+        'padding:6px 8px',
+        'display:none',
+        'flex-direction:column',
+        'gap:4px',
+        'font:12px/1.4 monospace',
+        'color:#0f0',
+        'background:rgba(0,0,0,0.6)',
+        'z-index:1000',
+    ].join(';');
+
+    // Line segments for the physics wireframe. Coloured per-vertex by crashcat.
+    const physicsLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true }));
+    physicsLines.visible = false;
+    physicsLines.frustumCulled = false; // geometry is rebuilt each frame; skip culling
+
+    // Marker drawn at the last raycast hit. Non-raycastable so clicks don't hit it.
+    const raycastMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.05, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xff3366, depthTest: false }),
+    );
+    raycastMarker.visible = false;
+    raycastMarker.renderOrder = 1000;
+    raycastMarker.frustumCulled = false;
+    raycastMarker.raycast = () => {};
+
+    const overlay: DebugOverlay = {
+        element,
+        text: document.createElement('div'),
+        enabled: false,
+        showPhysics: false,
+        showNavMesh: false,
+        physicsLines,
+        raycaster: new THREE.Raycaster(),
+        raycastMarker,
+        lastHit: null,
+    };
+
+    const physicsCheckbox = createCheckbox('physics debug', (checked) => {
+        overlay.showPhysics = checked;
+        physicsLines.visible = checked;
+    });
+
+    const navmeshCheckbox = createCheckbox('navmesh debug', (checked) => {
+        overlay.showNavMesh = checked;
+    });
+
+    overlay.text.style.cssText = 'white-space:pre;user-select:text;-webkit-user-select:text;cursor:text';
+
+    element.append(physicsCheckbox, navmeshCheckbox, overlay.text);
+    document.body.appendChild(element);
+
+    window.addEventListener('keydown', (event) => {
+        if (event.key === '`') {
+            overlay.enabled = !overlay.enabled;
+            element.style.display = overlay.enabled ? 'flex' : 'none';
+        }
+    });
+
+    return overlay;
+}
+
+// Wire up click-to-raycast against the scene (e.g. the splat). On each click the
+// marker jumps to the hit point and overlay.lastHit is updated.
+export function attachDebugRaycast(
+    overlay: DebugOverlay,
+    camera: THREE.Camera,
+    scene: THREE.Scene,
+    domElement: HTMLElement,
+): void {
+    const ndc = new THREE.Vector2();
+
+    domElement.addEventListener('click', (event) => {
+        const rect = domElement.getBoundingClientRect();
+        ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        overlay.raycaster.setFromCamera(ndc, camera);
+        const hit = overlay.raycaster.intersectObjects(scene.children, true)[0];
+        if (!hit) return;
+
+        overlay.lastHit = hit.point.clone();
+        overlay.raycastMarker.position.copy(hit.point);
+        overlay.raycastMarker.visible = true;
+    });
+}
+
+export function updateDebugOverlay(overlay: DebugOverlay, camera: THREE.PerspectiveCamera, controls: OrbitControls): void {
+    if (!overlay.enabled) return;
+
+    const p = camera.position;
+    const t = controls.target;
+    const h = overlay.lastHit;
+    overlay.text.textContent =
+        `pos    ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}\n` +
+        `target ${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}\n` +
+        `hit    ${h ? `${h.x.toFixed(2)}, ${h.y.toFixed(2)}, ${h.z.toFixed(2)}` : '-'}`;
+}
+
+// Rebuild the physics wireframe from the crashcat debug helpers (flat line segments).
+export function updatePhysicsDebug(overlay: DebugOverlay, world: World): void {
+    if (!overlay.showPhysics) return;
+
+    const { vertices, colors } = ccDebug.bodies(world);
+    const geometry = overlay.physicsLines.geometry;
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
