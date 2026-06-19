@@ -11,6 +11,8 @@ export type DebugOverlay = {
     showPhysics: boolean;
     /** Whether the navmesh wireframe is drawn (toggled by the checkbox). */
     showNavMesh: boolean;
+    /** Whether the SDF light wireframes are drawn (toggled by the checkbox). */
+    showLights: boolean;
     /** Line segments rendering the crashcat physics debug wireframe. Add to your scene. */
     physicsLines: THREE.LineSegments;
     /** Raycaster used for click-to-raycast against the scene. */
@@ -70,6 +72,7 @@ export function createDebugOverlay(): DebugOverlay {
         enabled: false,
         showPhysics: false,
         showNavMesh: false,
+        showLights: false,
         physicsLines,
         raycaster: new THREE.Raycaster(),
         raycastMarker,
@@ -85,15 +88,21 @@ export function createDebugOverlay(): DebugOverlay {
         overlay.showNavMesh = checked;
     });
 
+    const lightsCheckbox = createCheckbox('lights debug', (checked) => {
+        overlay.showLights = checked;
+    });
+
     overlay.text.style.cssText = 'white-space:pre;user-select:text;-webkit-user-select:text;cursor:text';
 
-    element.append(physicsCheckbox, navmeshCheckbox, overlay.text);
+    element.append(physicsCheckbox, navmeshCheckbox, lightsCheckbox, overlay.text);
     document.body.appendChild(element);
 
     window.addEventListener('keydown', (event) => {
         if (event.key === '`') {
             overlay.enabled = !overlay.enabled;
             element.style.display = overlay.enabled ? 'flex' : 'none';
+            // Raycast is a panel feature — hide its marker when the panel closes.
+            if (!overlay.enabled) overlay.raycastMarker.visible = false;
         }
     });
 
@@ -111,6 +120,8 @@ export function attachDebugRaycast(
     const ndc = new THREE.Vector2();
 
     domElement.addEventListener('click', (event) => {
+        if (!overlay.enabled) return; // only raycast while the debug panel is open
+
         const rect = domElement.getBoundingClientRect();
         ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;

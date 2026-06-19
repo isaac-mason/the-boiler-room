@@ -25,6 +25,7 @@
   "dependencies": {
     "@sparkjsdev/spark": "^2.1.0",
     "crashcat": "^0.0.4",
+    "mathcat": "0.0.11",
     "navcat": "^0.4.1",
     "packcat": "^0.3.0",
     "three": "^0.184.0"

@@ -1,8 +1,21 @@
-import { addTile, createNavMesh, type NavMesh, type NavMeshTile, type Vec3 } from 'navcat';
+import {
+    addTile,
+    createFindNearestPolyResult,
+    createNavMesh,
+    DEFAULT_QUERY_FILTER,
+    findNearestPoly,
+    type NavMesh,
+    type NavMeshTile,
+    type Vec3,
+} from 'navcat';
+import { crowd } from 'navcat/blocks';
 import { createNavMeshHelper, type DebugObject } from 'navcat/three';
 import * as THREE from 'three';
 
 const NAVMESH_URL = '/navmesh.json';
+
+const CROWD_MAX_AGENT_RADIUS = 0.1;
+const FIND_HALF_EXTENTS: Vec3 = [0.5, 1, 0.5];
 
 type NavMeshData = {
     origin: Vec3;
@@ -14,12 +27,14 @@ type NavMeshData = {
 export type Navigation = {
     navMesh: NavMesh | null;
     navMeshHelper: DebugObject | null;
+    crowd: crowd.Crowd | null;
 };
 
 export function initNavigation(): Navigation {
     return {
         navMesh: null,
         navMeshHelper: null,
+        crowd: null,
     };
 }
 
@@ -38,16 +53,90 @@ export async function loadNavigation(navigation: Navigation): Promise<void> {
     }
 
     navigation.navMesh = navMesh;
+    navigation.crowd = crowd.create(CROWD_MAX_AGENT_RADIUS);
+    // Default placement tolerance is just maxAgentRadius (tiny) — widen it so an
+    // agent snaps onto the navmesh even if its spawn point isn't exactly on a poly.
+    navigation.crowd.agentPlacementHalfExtents = [1, 2, 1];
 }
 
-// Show/hide the navmesh debug wireframe, building it lazily on first show.
+/* ---------------- crowd (agent steering / avoidance) ---------------- */
+
+const _nearest = createFindNearestPolyResult();
+
+// Default agent params for a mite of the given radius/height/speed.
+export function makeAgentParams(radius: number, height: number, maxSpeed: number): crowd.AgentParams {
+    return {
+        radius,
+        height,
+        maxAcceleration: maxSpeed * 8,
+        maxSpeed,
+        collisionQueryRange: radius * 6,
+        separationWeight: 1,
+        updateFlags:
+            crowd.CrowdUpdateFlags.ANTICIPATE_TURNS |
+            crowd.CrowdUpdateFlags.OBSTACLE_AVOIDANCE |
+            crowd.CrowdUpdateFlags.SEPARATION |
+            crowd.CrowdUpdateFlags.OPTIMIZE_VIS |
+            crowd.CrowdUpdateFlags.OPTIMIZE_TOPO,
+        queryFilter: DEFAULT_QUERY_FILTER,
+    };
+}
+
+export function addCrowdAgent(navigation: Navigation, position: Vec3, params: crowd.AgentParams): string | null {
+    if (!navigation.crowd || !navigation.navMesh) return null;
+    return crowd.addAgent(navigation.crowd, navigation.navMesh, position, params);
+}
+
+// Snap a world point onto the nearest navmesh poly. Returns false if none is
+// within the search box. Also used by recovery (re-grounding an off-mesh mite).
+export function snapToNavMesh(navigation: Navigation, point: Vec3, out: Vec3): boolean {
+    if (!navigation.navMesh) return false;
+    findNearestPoly(_nearest, navigation.navMesh, point, FIND_HALF_EXTENTS, DEFAULT_QUERY_FILTER);
+    if (!_nearest.success) return false;
+    out[0] = _nearest.position[0];
+    out[1] = _nearest.position[1];
+    out[2] = _nearest.position[2];
+    return true;
+}
+
+export function getAgent(navigation: Navigation, agentId: string): crowd.Agent | undefined {
+    return navigation.crowd?.agents[agentId];
+}
+
+export function setAgentMaxSpeed(navigation: Navigation, agentId: string, maxSpeed: number): void {
+    const agent = navigation.crowd?.agents[agentId];
+    if (agent) agent.maxSpeed = maxSpeed;
+}
+
+// Send an agent toward a world point (snapped onto the navmesh).
+export function setAgentTarget(navigation: Navigation, agentId: string, target: Vec3): boolean {
+    if (!navigation.crowd || !navigation.navMesh) return false;
+    findNearestPoly(_nearest, navigation.navMesh, target, FIND_HALF_EXTENTS, DEFAULT_QUERY_FILTER);
+    if (!_nearest.success) return false;
+    return crowd.requestMoveTarget(navigation.crowd, agentId, _nearest.nodeRef, _nearest.position);
+}
+
+export function setAgentVelocity(navigation: Navigation, agentId: string, velocity: Vec3): boolean {
+    if (!navigation.crowd) return false;
+    return crowd.requestMoveVelocity(navigation.crowd, agentId, velocity);
+}
+
+export function isAgentAtTarget(navigation: Navigation, agentId: string, threshold: number): boolean {
+    if (!navigation.crowd) return false;
+    return crowd.isAgentAtTarget(navigation.crowd, agentId, threshold);
+}
+
+export function updateCrowd(navigation: Navigation, dt: number): void {
+    if (!navigation.crowd || !navigation.navMesh) return;
+    crowd.update(navigation.crowd, navigation.navMesh, dt);
+}
+
 export function updateNavigation(navigation: Navigation, scene: THREE.Scene, show: boolean): void {
     if (!navigation.navMesh) return;
 
     if (show && !navigation.navMeshHelper) {
         const helper = createNavMeshHelper(navigation.navMesh);
 
-        // Draw the overlay on top of the splat instead of z-fighting with it.
         helper.object.traverse((o) => {
             if (o instanceof THREE.Mesh) {
                 o.frustumCulled = false;

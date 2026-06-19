@@ -14,6 +14,9 @@ importers:
       crashcat:
         specifier: ^0.0.4
         version: 0.0.4(mathcat@0.0.11)(three@0.184.0)
+      mathcat:
+        specifier: 0.0.11
+        version: 0.0.11
       navcat:
         specifier: ^0.4.1
         version: 0.4.1(three@0.184.0)

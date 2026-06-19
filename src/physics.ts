@@ -2,6 +2,7 @@ import {
     addBroadphaseLayer,
     addObjectLayer,
     type BodyId,
+    box,
     createWorld,
     createWorldSettings,
     enableCollision,
@@ -36,10 +37,19 @@ export type Physics = {
     world: World;
 };
 
+export const FLOOR_Y = -0.1;
+
 export function initPhysics(): Physics {
-    return {
-        world: createWorld(settings),
-    };
+    const world = createWorld(settings);
+
+    rigidBody.create(world, {
+        shape: box.create({ halfExtents: [5, 0.1, 5] }),
+        position: [0, FLOOR_Y, 0],
+        motionType: MotionType.STATIC,
+        objectLayer: OBJECT_LAYER_NOT_MOVING,
+    });
+
+    return { world };
 }
 
 // Clamp the frame delta so a long pause (e.g. tab refocus) can't blow up the sim.
