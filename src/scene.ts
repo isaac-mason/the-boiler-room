@@ -14,8 +14,8 @@ export const COLLIDER_URL = `${BASE}collider.bin`;
 export const NAVMESH_URL = `${BASE}navmesh.json`;
 
 // --- Camera framing (world-space) ---
-export const CAMERA_POSITION: Vec3 = [-0.37, 0.35, 0.16];
-export const CAMERA_TARGET: Vec3 = [-0.47, 0.38, -0.59];
+export const CAMERA_POSITION: Vec3 = [-0.39, 0.91, -0.19];
+export const CAMERA_TARGET: Vec3 = [-0.8, 0.4, -2];
 
 // --- World landmarks (world-space) ---
 export const FIRE_ORIGIN: Vec3 = [-1.6, 0.09, -2.44]; // boiler fire — drives lighting, heat shimmer, dust

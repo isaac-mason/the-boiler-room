@@ -14,7 +14,7 @@ import { dirname, resolve } from 'node:path';
 import { NodeIO } from '@gltf-transform/core';
 import { generateSoloNavMesh, type SoloNavMeshOptions } from 'navcat/blocks';
 
-const INPUT = process.argv[2] ?? 'assets/Spirited Away Boiler Room_collider.glb';
+const INPUT = process.argv[2] ?? 'assets/BoilerRoom_collider.glb';
 const OUTPUT = process.argv[3] ?? 'public/navmesh.json';
 
 async function main() {
@@ -69,8 +69,8 @@ async function main() {
     const cs = 0.02;
     const ch = 0.02;
 
-    const walkableRadiusWorld = 0.1;
-    const walkableClimbWorld = 0.5;
+    const walkableRadiusWorld = 0.2;
+    const walkableClimbWorld = 0.2;
     const walkableHeightWorld = 1;
 
     const options: SoloNavMeshOptions = {

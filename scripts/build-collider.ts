@@ -16,7 +16,7 @@ import { type Collider, packCollider } from '../src/collider-schema.ts';
 
 const TRIANGLES = 4; // glTF primitive mode
 
-const INPUT = process.argv[2] ?? 'assets/Spirited Away Boiler Room_collider.glb';
+const INPUT = process.argv[2] ?? 'assets/BoilerRoom_collider.glb';
 const OUTPUT = process.argv[3] ?? 'public/collider.bin';
 
 async function main() {

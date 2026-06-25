@@ -30,7 +30,7 @@ SPARK_VERSION="${SPARK_VERSION:-v2.1.0}"
 VENDOR_DIR="vendor/spark"
 MANIFEST="$VENDOR_DIR/rust/build-lod/Cargo.toml"
 
-INPUT="${1:-assets/Spirited Away Boiler Room.spz}"
+INPUT="${1:-assets/BoilerRoom.spz}"
 OUTPUT_DIR="public"
 # Drop the consumed positional arg; the rest are passed through to build-lod.
 shift || true
