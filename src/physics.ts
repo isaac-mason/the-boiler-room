@@ -14,6 +14,7 @@ import {
     type World,
 } from 'crashcat';
 import type { Collider } from './collider-schema';
+import { FLOOR_Y } from './scene';
 
 // Register all shapes & constraints up front. Simplest during development; swap
 // for granular registerShapes/registerConstraints later for better tree-shaking.
@@ -29,6 +30,7 @@ export const BROADPHASE_LAYER_NOT_MOVING = addBroadphaseLayer(settings);
 
 export const OBJECT_LAYER_MOVING = addObjectLayer(settings, BROADPHASE_LAYER_MOVING);
 export const OBJECT_LAYER_NOT_MOVING = addObjectLayer(settings, BROADPHASE_LAYER_NOT_MOVING);
+export const OBJECT_LAYER_GHOST = addObjectLayer(settings, BROADPHASE_LAYER_MOVING);
 
 enableCollision(settings, OBJECT_LAYER_MOVING, OBJECT_LAYER_NOT_MOVING);
 enableCollision(settings, OBJECT_LAYER_MOVING, OBJECT_LAYER_MOVING);
@@ -36,8 +38,6 @@ enableCollision(settings, OBJECT_LAYER_MOVING, OBJECT_LAYER_MOVING);
 export type Physics = {
     world: World;
 };
-
-export const FLOOR_Y = -0.1;
 
 export function initPhysics(): Physics {
     const world = createWorld(settings);

@@ -6,7 +6,7 @@ import { mat4, type Quat, type Vec3 } from 'mathcat';
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { OBJECT_LAYER_MOVING, type Physics } from './physics';
+import { OBJECT_LAYER_GHOST, OBJECT_LAYER_MOVING, type Physics } from './physics';
 
 const SHAPE_COUNT = 6; // distinct deterministic lumps
 const POINTS_PER_HULL = 14;
@@ -141,10 +141,12 @@ export function despawnCoal(coal: CoalSystem, physics: Physics, c: Coal): void {
     if (i >= 0) coal.list.splice(i, 1);
 }
 
-// Pick the coal up: make it kinematic (held, no gravity) and mark it carried.
+// Pick the coal up: kinematic (held, no gravity), moved to the no-collision layer
+// (so it doesn't jank against the carrier/other coal), and marked carried.
 export function carryCoal(world: World, c: Coal): void {
     if (c.state !== 'carried') {
         rigidBody.setMotionType(world, c.body, MotionType.KINEMATIC, true);
+        rigidBody.setObjectLayer(world, c.body, OBJECT_LAYER_GHOST);
         c.state = 'carried';
     }
 }
@@ -155,11 +157,28 @@ export function holdCoalAt(world: World, c: Coal, point: Vec3, quaternion: Quat)
     rigidBody.setTransform(world, c.body, point, quaternion, true);
 }
 
-// Throw it: back to dynamic with a launch velocity.
+// Throw it: back to dynamic + the colliding layer, with a launch velocity.
 export function throwCoal(world: World, c: Coal, velocity: Vec3): void {
     rigidBody.setMotionType(world, c.body, MotionType.DYNAMIC, true);
+    rigidBody.setObjectLayer(world, c.body, OBJECT_LAYER_MOVING);
     rigidBody.setLinearVelocity(world, c.body, velocity);
     c.state = 'thrown';
+}
+
+// Force-drop a carried coal (carrier knocked over): back to dynamic + the
+// colliding layer + loose, so it falls and can be picked up again.
+export function dropCoal(world: World, c: Coal): void {
+    if (c.state !== 'loose') {
+        rigidBody.setMotionType(world, c.body, MotionType.DYNAMIC, true);
+        rigidBody.setObjectLayer(world, c.body, OBJECT_LAYER_MOVING);
+        c.state = 'loose';
+    }
+}
+
+// Knock a coal around (pointer push). Releases it first if it was being carried.
+export function pushCoal(world: World, c: Coal, velocity: Vec3): void {
+    dropCoal(world, c);
+    rigidBody.setLinearVelocity(world, c.body, velocity);
 }
 
 // Sync instance transforms from the bodies (post-physics). Carried coal is

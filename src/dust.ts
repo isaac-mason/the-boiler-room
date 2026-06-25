@@ -8,7 +8,7 @@ import { flicker, LIGHT_ORIGIN } from './lighting';
 const COUNT = 2500;
 
 // World-space box the dust fills (roughly the boiler-room interior).
-const BOUNDS_MIN = new THREE.Vector3(-3, 0.2, -4);
+const BOUNDS_MIN = new THREE.Vector3(-2.3, 0.2, -4);
 const BOUNDS_MAX = new THREE.Vector3(1, 2.5, 1);
 
 const vertexShader = /* glsl */ `
@@ -124,9 +124,10 @@ export function initDust(): Dust {
     return { points, material };
 }
 
-export function updateDust(dust: Dust, time: number): void {
+// `heat` is the shared furnace intensity (0..1). Motes near the boiler glow
+// brighter as the fire is stoked, on top of the per-frame flicker (~-1..1).
+export function updateDust(dust: Dust, time: number, heat: number): void {
     const u = dust.material.uniforms;
     u.uTime.value = time;
-    // light pickup pulses with the fire flicker (flicker is roughly -1..1)
-    u.uLightIntensity.value = THREE.MathUtils.clamp(0.55 + flicker(time) * 0.45, 0, 1);
+    u.uLightIntensity.value = THREE.MathUtils.clamp(0.4 + heat * 0.4 + flicker(time) * 0.45, 0, 1);
 }

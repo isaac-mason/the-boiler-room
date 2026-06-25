@@ -12,17 +12,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { NodeIO } from '@gltf-transform/core';
-import type { Collider } from '../src/collider-schema.ts';
-
-// packcat creates a Float16Array scratch buffer at import time; Node < 24 lacks
-// the global. Float16Array is 2 bytes/element, so alias it to Uint16Array (same
-// size) to satisfy construction. Our schema only uses float32/uint32, so the
-// float16 codepath is never actually exercised. The schema (which imports
-// packcat) is dynamically imported below, after this shim is installed.
-const g = globalThis as { Float16Array?: unknown };
-if (typeof g.Float16Array === 'undefined') {
-    g.Float16Array = Uint16Array;
-}
+import { type Collider, packCollider } from '../src/collider-schema.ts';
 
 const TRIANGLES = 4; // glTF primitive mode
 
@@ -30,8 +20,6 @@ const INPUT = process.argv[2] ?? 'assets/Spirited Away Boiler Room_collider.glb'
 const OUTPUT = process.argv[3] ?? 'public/collider.bin';
 
 async function main() {
-    const { packCollider } = await import('../src/collider-schema.ts');
-
     const io = new NodeIO();
     const doc = await io.read(resolve(INPUT));
     const root = doc.getRoot();

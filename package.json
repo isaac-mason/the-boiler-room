@@ -1,33 +1,39 @@
 {
-  "name": "my-app",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "lint": "biome check .",
-    "format": "biome format --write .",
-    "check": "biome check --write .",
-    "build:lod": "scripts/build-lod.sh",
-    "build:collider": "tsx scripts/build-collider.ts",
-    "build:navmesh": "tsx scripts/build-navmesh.ts"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.5.0",
-    "@gltf-transform/core": "^4.4.0",
-    "@types/three": "^0.184.1",
-    "tsx": "^4.22.4",
-    "typescript": "~6.0.2",
-    "vite": "^8.0.12"
-  },
-  "dependencies": {
-    "@sparkjsdev/spark": "^2.1.0",
-    "crashcat": "^0.0.4",
-    "mathcat": "0.0.11",
-    "navcat": "^0.4.1",
-    "packcat": "^0.3.0",
-    "three": "^0.184.0"
-  }
+    "name": "the-boiler-room",
+    "private": true,
+    "version": "0.0.0",
+    "description": "A living Gaussian-splat scene (physics, a navmesh crowd, and fire VFX on a Spark splat); a starter for interactive splat worlds.",
+    "license": "MIT",
+    "author": "Isaac Mason",
+    "type": "module",
+    "engines": {
+        "node": ">=24"
+    },
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc && vite build",
+        "preview": "vite preview",
+        "lint": "biome check .",
+        "format": "biome format --write .",
+        "check": "biome check --write .",
+        "build:lod": "scripts/build-lod.sh",
+        "build:collider": "tsx scripts/build-collider.ts",
+        "build:navmesh": "tsx scripts/build-navmesh.ts"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "2.5.0",
+        "@gltf-transform/core": "^4.4.0",
+        "@types/three": "^0.184.1",
+        "tsx": "^4.22.4",
+        "typescript": "~6.0.2",
+        "vite": "^8.0.12"
+    },
+    "dependencies": {
+        "@sparkjsdev/spark": "^2.1.0",
+        "crashcat": "^0.0.4",
+        "mathcat": "0.0.11",
+        "navcat": "^0.4.1",
+        "packcat": "^0.3.0",
+        "three": "^0.184.0"
+    }
 }

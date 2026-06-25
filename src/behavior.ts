@@ -2,16 +2,24 @@
 // carry it to the dropoff, throw it into the boiler (which flares), then repeat.
 // A fresh coal respawns on the clump for each one consumed.
 import { type Vec3, vec3 } from 'mathcat';
-import { type Coal, type CoalSystem, carryCoal, despawnCoal, holdCoalAt, spawnCoal, throwCoal } from './coal';
-import { flareLighting, type Lighting } from './lighting';
+import { type Coal, type CoalSystem, carryCoal, despawnCoal, dropCoal, holdCoalAt, spawnCoal, throwCoal } from './coal';
+import { type Furnace, stokeFurnace } from './furnace';
 import { AGENT_MAX_SPEED, getMiteCarryPoint, gripCoal, type Mite, type Mites, setArmTarget } from './mites';
 import { isAgentAtTarget, type Navigation, setAgentMaxSpeed, setAgentTarget } from './navigation';
-import { FLOOR_Y, type Physics } from './physics';
+import type { Physics } from './physics';
+import { BOILER, CLUMP, DROPOFF, FLOOR_Y, SPARK_ORIGIN } from './scene';
 import { type Sparks, sparksBurst } from './sparks';
-import { BOILER, CLUMP, DROPOFF, SPARK_ORIGIN } from './waypoints';
 
 type TaskState = 'seek' | 'grab' | 'carry' | 'throw' | 'cooldown';
-type Task = { state: TaskState; coal: Coal | null; cooldownUntil: number; grabStart: number; grabFrom: Vec3 };
+type Task = {
+    state: TaskState;
+    coal: Coal | null; // the coal being carried (grab/carry/throw)
+    cooldownUntil: number;
+    grabStart: number;
+    grabFrom: Vec3;
+    seekCoal: Coal | null; // the loose coal being walked toward (seek)
+    seekPos: Vec3; // last position we pathed to (re-path if it rolls away)
+};
 
 export type Behavior = { tasks: Map<Mite, Task> };
 
@@ -19,7 +27,7 @@ export function initBehavior(): Behavior {
     return { tasks: new Map() };
 }
 
-const GRAB_RADIUS = 0.3; // how close to the clump counts as "at the pile"
+const GRAB_RADIUS = 0.13; // must be ~on top of the coal to grab it (else it looks force-pulled)
 const GRAB_DURATION = 0.45; // seconds to lift a coal from the ground to overhead
 const ARRIVE = 0.18; // crowd "arrived at dropoff" threshold
 const COOLDOWN = 0.6; // pause after a throw before seeking again
@@ -46,13 +54,25 @@ const _carry: Vec3 = [0, 0, 0];
 const _held: Vec3 = [0, 0, 0];
 const _vel: Vec3 = [0, 0, 0];
 
-// An unclaimed loose coal near the clump, or null.
-function findLooseCoal(coal: CoalSystem): Coal | null {
+const RETARGET_DIST = 0.15; // re-path to the sought coal if it has rolled this far from our target
+
+// Nearest unclaimed (loose) coal to a point, anywhere in the room — so dropped
+// coal gets collected, not just the clump pile.
+function findNearestLooseCoal(coal: CoalSystem, pos: Vec3): Coal | null {
+    let best: Coal | null = null;
+    let bestSq = Infinity;
     for (const c of coal.list) {
         if (c.state !== 'loose') continue;
-        if (vec3.distance(c.body.position, CLUMP) < GRAB_RADIUS + 0.3) return c;
+        const dx = c.body.position[0] - pos[0];
+        const dy = c.body.position[1] - pos[1];
+        const dz = c.body.position[2] - pos[2];
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < bestSq) {
+            bestSq = d;
+            best = c;
+        }
     }
-    return null;
+    return best;
 }
 
 // Velocity to lob from `start` to `target` over THROW_TIME seconds (gravity arc).
@@ -70,39 +90,74 @@ export function updateBehavior(
     coal: CoalSystem,
     navigation: Navigation,
     physics: Physics,
-    lighting: Lighting,
+    furnace: Furnace,
     sparks: Sparks,
     time: number,
 ): void {
     const world = physics.world;
 
     for (const mite of mites.list) {
-        if (mite.mode !== 'crowd' || !mite.agentId) continue;
+        const existing = behavior.tasks.get(mite);
 
-        let task = behavior.tasks.get(mite);
+        // Ragdolled / agent-less (e.g. pointer-knocked): drop any carried coal so it
+        // isn't left frozen in mid-air, and reset the task for when it recovers.
+        if (mite.mode !== 'crowd' || !mite.agentId) {
+            if (existing?.coal && existing.coal.state === 'carried') dropCoal(world, existing.coal);
+            if (existing) {
+                existing.coal = null;
+                existing.seekCoal = null;
+                existing.state = 'seek';
+            }
+            mite.load = 0;
+            setArmTarget(mite, 0, null);
+            setArmTarget(mite, 1, null);
+            continue;
+        }
+
+        let task = existing;
         if (!task) {
-            task = { state: 'seek', coal: null, cooldownUntil: 0, grabStart: 0, grabFrom: [0, 0, 0] };
+            task = {
+                state: 'seek',
+                coal: null,
+                cooldownUntil: 0,
+                grabStart: 0,
+                grabFrom: [0, 0, 0],
+                seekCoal: null,
+                seekPos: [0, 0, 0],
+            };
             behavior.tasks.set(mite, task);
-            setAgentTarget(navigation, mite.agentId, CLUMP);
         }
 
         switch (task.state) {
             case 'seek': {
-                // at the pile? grab an unclaimed coal (carryCoal flips it to 'carried' = claimed)
-                if (isAgentAtTarget(navigation, mite.agentId, GRAB_RADIUS)) {
-                    const c = findLooseCoal(coal);
-                    if (c) {
-                        carryCoal(world, c);
-                        task.coal = c;
-                        task.grabFrom[0] = c.body.position[0];
-                        task.grabFrom[1] = c.body.position[1];
-                        task.grabFrom[2] = c.body.position[2];
-                        task.grabStart = time;
-                        task.state = 'grab';
-                        setAgentMaxSpeed(navigation, mite.agentId, carrySpeed(c.size)); // heavier = slower
-                        mite.load = c.size; // burdened → struggling gait
+                // walk to the NEAREST loose coal anywhere (so dropped coal gets cleaned up)
+                const c = findNearestLooseCoal(coal, mite.position);
+                if (!c) {
+                    // nothing loose — wait near the clump where coal spawns
+                    if (task.seekCoal) {
+                        task.seekCoal = null;
+                        setAgentTarget(navigation, mite.agentId, CLUMP);
                     }
-                    // else wait at the clump for coal to (re)spawn
+                    break;
+                }
+                // (re)path when the target coal changes or has rolled away
+                if (c !== task.seekCoal || vec3.distance(c.body.position, task.seekPos) > RETARGET_DIST) {
+                    task.seekCoal = c;
+                    vec3.copy(task.seekPos, c.body.position);
+                    setAgentTarget(navigation, mite.agentId, c.body.position);
+                }
+                // close enough? grab it (carryCoal flips it to 'carried' = claimed)
+                if (vec3.distance(mite.position, c.body.position) < GRAB_RADIUS) {
+                    carryCoal(world, c);
+                    task.coal = c;
+                    task.seekCoal = null;
+                    task.grabFrom[0] = c.body.position[0];
+                    task.grabFrom[1] = c.body.position[1];
+                    task.grabFrom[2] = c.body.position[2];
+                    task.grabStart = time;
+                    task.state = 'grab';
+                    setAgentMaxSpeed(navigation, mite.agentId, carrySpeed(c.size)); // heavier = slower
+                    mite.load = c.size; // burdened → struggling gait
                 }
                 break;
             }
@@ -114,6 +169,7 @@ export function updateBehavior(
                     setArmTarget(mite, 0, null);
                     setArmTarget(mite, 1, null);
                     task.coal = null;
+                    task.seekCoal = null;
                     task.state = 'seek';
                     setAgentTarget(navigation, mite.agentId, CLUMP);
                     setAgentMaxSpeed(navigation, mite.agentId, AGENT_MAX_SPEED);
@@ -138,6 +194,7 @@ export function updateBehavior(
                     setArmTarget(mite, 0, null);
                     setArmTarget(mite, 1, null);
                     task.coal = null;
+                    task.seekCoal = null;
                     task.state = 'seek';
                     setAgentTarget(navigation, mite.agentId, CLUMP);
                     setAgentMaxSpeed(navigation, mite.agentId, AGENT_MAX_SPEED);
@@ -189,7 +246,7 @@ export function updateBehavior(
 
         if (reached || fell || landed) {
             if (reached) {
-                flareLighting(lighting, 1);
+                stokeFurnace(furnace, 1); // the shared "fire is hot" signal — all VFX read it
                 sparksBurst(sparks, SPARK_ORIGIN, 24); // embers fly out of the fire
             }
             despawnCoal(coal, physics, c);

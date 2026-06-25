@@ -29,11 +29,12 @@ import {
     isAgentAtTarget,
     makeAgentParams,
     type Navigation,
+    removeCrowdAgent,
     setAgentTarget,
     snapToNavMesh,
 } from './navigation';
 import { OBJECT_LAYER_MOVING, type Physics } from './physics';
-import { CLUMP, DROPOFF } from './waypoints';
+import { CLUMP, DROPOFF } from './scene';
 
 /* ---------------- config (all spatial dims scaled by MITE_SCALE) ---------------- */
 
@@ -97,6 +98,15 @@ const GROUND_RAY_LEN = 1.2;
 const ARRIVE_THRESHOLD = 0.15; // crowd "at target" distance
 const TURN_RATE = 8; // how fast the body yaws toward its heading (per second, slerp fraction)
 const TURN_MIN_SPEED = 0.02; // below this speed, keep the current facing (don't spin in place)
+
+// Ragdoll (pointer-knocked): the body goes dynamic and tumbles, limbs flailing.
+const RAGDOLL_MIN_TIME = 1.6; // min seconds to tumble before recovery is allowed
+const RAGDOLL_SETTLE_SPEED = 0.15; // recover once the tumbling body slows below this (m/s)
+const RAGDOLL_PUSH = 2.5; // launch speed along the click direction (m/s)
+const RAGDOLL_PUSH_UP = 2.0; // upward kick (m/s)
+const RAGDOLL_SPIN = 18; // tumble angular velocity magnitude (rad/s)
+const RAGDOLL_FLAIL = 0.3; // limb-target jitter while ragdolling (× MITE_SCALE)
+const GETUP_DURATION = 0.7; // seconds to animate from the tumbled pose back to standing
 
 const EYE_RADIUS = 0.14 * MITE_SCALE;
 const IRIS_RADIUS = 0.05 * MITE_SCALE;
@@ -184,7 +194,7 @@ type Eye = {
     local: Vec3; // iris offset in eye plane
 };
 
-export type MiteMode = 'crowd' | 'velocity' | 'ragdoll';
+export type MiteMode = 'crowd' | 'velocity' | 'ragdoll' | 'getup';
 
 export type Mite = {
     body: RigidBody;
@@ -198,6 +208,13 @@ export type Mite = {
     armPhase: number; // smoothly-accumulated arm-swing phase (0..1), so the swing never jitters
     load: number; // coal size being carried (0 = empty) — drives the "struggling" gait
     cadence: number; // current gait cycles/sec (set in pre-step, used to time step swings)
+    ragdollTimer: number; // seconds spent ragdolling (mode === 'ragdoll') — for recovery
+    // Animated get-up (mode === 'getup'): lerp/slerp the body from its tumbled pose
+    // back to standing before re-attaching the crowd agent.
+    getupTimer: number;
+    getupFromPos: Vec3;
+    getupFromQuat: Quat;
+    getupToPos: Vec3; // standing body pose (navmesh point + ride height)
     stepCycleTime: number;
     grounded: boolean;
     legs: LimbState[];
@@ -230,6 +247,7 @@ const footSettings = createDefaultCastRaySettings();
 
 const UP: Vec3 = [0, 1, 0];
 const FORWARD: Vec3 = [0, 0, 1]; // body-local forward (the +Z the mite faces)
+const UPRIGHT: Quat = [0, 0, 0, 1]; // identity orientation (used on ragdoll recovery)
 
 const _dir: Vec3 = [0, 0, 0];
 const _mid: Vec3 = [0, 0, 0];
@@ -246,6 +264,8 @@ const _quatConj: Quat = quat.create();
 const _gripL: Vec3 = [0, 0, 0];
 const _gripR: Vec3 = [0, 0, 0];
 const _fwd: Vec3 = [0, 0, 0];
+const _getupPos: Vec3 = [0, 0, 0];
+const _getupQuat: Quat = [0, 0, 0, 1];
 
 const COLOR_BODY = new THREE.Color(0x504438);
 const COLOR_LIMB = new THREE.Color(0x382f26);
@@ -406,6 +426,11 @@ export function spawnMites(mites: Mites, physics: Physics, navigation: Navigatio
             armPhase: Math.random(), // desync the swing across mites
             load: 0,
             cadence: STEP_CADENCE_BASE,
+            ragdollTimer: 0,
+            getupTimer: 0,
+            getupFromPos: [0, 0, 0],
+            getupFromQuat: [0, 0, 0, 1],
+            getupToPos: [0, 0, 0],
             stepCycleTime: Math.random(),
             grounded: false,
             legs,
@@ -700,6 +725,92 @@ function writeMite(mesh: THREE.BatchedMesh, mite: Mite): void {
     }
 }
 
+/* ---------------- ragdoll (pointer interaction) ---------------- */
+
+// Knock a mite over: body → dynamic, launched along `dir` with a tumble spin.
+// Re-callable while ragdolling (re-kick). The behaviour drops any carried coal.
+export function ragdollMite(mite: Mite, navigation: Navigation, world: World, dir: Vec3): void {
+    if (mite.mode !== 'ragdoll') {
+        if (mite.agentId) {
+            removeCrowdAgent(navigation, mite.agentId);
+            mite.agentId = null;
+        }
+        rigidBody.setMotionType(world, mite.body, MotionType.DYNAMIC, true);
+        mite.mode = 'ragdoll';
+        mite.load = 0;
+        setArmTarget(mite, 0, null);
+        setArmTarget(mite, 1, null);
+    }
+    // Shove horizontally (away from the camera) + a consistent upward pop, so the
+    // knockover never depends on camera angle — a top-down ray would otherwise
+    // cancel the lift and just bury the mite in the floor.
+    const hlen = Math.hypot(dir[0], dir[2]) || 1;
+    rigidBody.setLinearVelocity(world, mite.body, [
+        (dir[0] / hlen) * RAGDOLL_PUSH,
+        RAGDOLL_PUSH_UP,
+        (dir[2] / hlen) * RAGDOLL_PUSH,
+    ]);
+    rigidBody.setAngularVelocity(world, mite.body, [
+        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
+        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
+        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
+    ]);
+    mite.ragdollTimer = 0;
+}
+
+// Settled — begin the animated get-up: body → kinematic, captured tumbled pose
+// lerps to standing (over GETUP_DURATION) before the agent re-attaches.
+function startGetup(mite: Mite, navigation: Navigation, world: World, groundFilter: Filter): void {
+    const snapped: Vec3 = [mite.body.position[0], mite.body.position[1], mite.body.position[2]];
+    snapToNavMesh(navigation, mite.body.position, snapped); // leaves `snapped` as-is if off-mesh
+
+    // Use the SAME ground raycast crowd uses for the standing height, so the body
+    // ends the get-up exactly where driveKinematic will hold it (no snap on handover).
+    const origin: Vec3 = [snapped[0], snapped[1] + GROUND_RAY_UP, snapped[2]];
+    groundCollector.reset();
+    castRay(world, groundCollector, groundSettings, origin, [0, -1, 0], GROUND_RAY_LEN, groundFilter);
+    let groundY = snapped[1];
+    if (groundCollector.hit.status === CastRayStatus.COLLIDING) {
+        groundY = origin[1] - groundCollector.hit.fraction * GROUND_RAY_LEN;
+    }
+
+    rigidBody.setMotionType(world, mite.body, MotionType.KINEMATIC, true);
+    vec3.copy(mite.getupFromPos, mite.body.position);
+    quat.copy(mite.getupFromQuat, mite.body.quaternion);
+    vec3.set(mite.getupToPos, snapped[0], groundY + HEIGHT, snapped[2]); // standing pose
+    mite.mode = 'getup';
+    mite.getupTimer = 0;
+    mite.speed = 0;
+    mite.smoothSpeed = 0;
+}
+
+// Get-up finished: snap upright at the standing pose and re-attach the crowd agent.
+function finishGetup(mite: Mite, navigation: Navigation): void {
+    const params = makeAgentParams(AGENT_RADIUS, HEIGHT, AGENT_MAX_SPEED);
+    mite.agentId = addCrowdAgent(navigation, mite.getupToPos, params);
+    mite.mode = 'crowd';
+    mite.quaternion[0] = 0;
+    mite.quaternion[1] = 0;
+    mite.quaternion[2] = 0;
+    mite.quaternion[3] = 1;
+    mite.grounded = false;
+}
+
+// While ragdolling: limbs hold their rest pose with a fast jitter, and the body's
+// full (tumbling) orientation flings them around → flailing.
+function ragdollLimbs(mite: Mite): void {
+    const t = mite.ragdollTimer;
+    const a = RAGDOLL_FLAIL * MITE_SCALE;
+    let k = 0;
+    for (const limb of [...mite.legs, ...mite.arms]) {
+        _targetLocal[0] = limb.def.restEnd[0] + Math.sin(t * 19 + k) * a;
+        _targetLocal[1] = limb.def.restEnd[1] + Math.cos(t * 16 + k * 1.7) * a;
+        _targetLocal[2] = limb.def.restEnd[2] + Math.sin(t * 23 + k * 2.3) * a;
+        solveLimb(limb, _targetLocal, false, 2);
+        k++;
+    }
+}
+
 /* ---------------- public update (split around the physics step) ---------------- */
 
 // Set crowd-agent targets. Must run BEFORE updateCrowd so agents steer this
@@ -716,6 +827,26 @@ export function updateMiteNavigation(mites: Mites, navigation: Navigation): void
 
 export function updateMitesPreStep(mites: Mites, navigation: Navigation, physics: Physics, dt: number): void {
     for (const mite of mites.list) {
+        if (mite.mode === 'ragdoll') {
+            // tumble freely; begin the get-up once it's flailed a bit AND settled
+            mite.ragdollTimer += dt;
+            const v = mite.body.motionProperties.linearVelocity;
+            if (mite.ragdollTimer > RAGDOLL_MIN_TIME && Math.hypot(v[0], v[1], v[2]) < RAGDOLL_SETTLE_SPEED) {
+                startGetup(mite, navigation, physics.world, mites.groundFilter);
+            }
+            continue;
+        }
+        if (mite.mode === 'getup') {
+            // ease the body from its tumbled pose back to standing, then re-attach the agent
+            mite.getupTimer += dt;
+            const p = Math.min(mite.getupTimer / GETUP_DURATION, 1);
+            const e = p * p * (3 - 2 * p); // smoothstep
+            vec3.lerp(_getupPos, mite.getupFromPos, mite.getupToPos, e);
+            quat.slerp(_getupQuat, mite.getupFromQuat, UPRIGHT, e);
+            rigidBody.moveKinematic(mite.body, _getupPos, _getupQuat, dt);
+            if (p >= 1) finishGetup(mite, navigation);
+            continue;
+        }
         driveKinematic(mite, physics.world, navigation, dt, mites.groundFilter);
         // cadence rises with speed → quicker steps when running; carrying slows it (laboured)
         let cadence = STEP_CADENCE_BASE + mite.speed * STEP_CADENCE_GAIN;
@@ -728,6 +859,37 @@ export function updateMitesPreStep(mites: Mites, navigation: Navigation, physics
 export function updateMitesPostStep(mites: Mites, physics: Physics, dt: number): void {
     for (const mite of mites.list) {
         vec3.set(mite.position, mite.body.position[0], mite.body.position[1], mite.body.position[2]);
+
+        if (mite.mode === 'ragdoll') {
+            quat.copy(mite.quaternion, mite.body.quaternion); // full tumbling orientation
+            ragdollLimbs(mite);
+            for (let i = 0; i < mite.eyes.length; i++) {
+                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
+                updateEye(mite.eyes[i], _eyeWorld, dt);
+            }
+            writeMite(mites.mesh, mite);
+            continue;
+        }
+
+        if (mite.mode === 'getup') {
+            // render the righting orientation; plant the feet under the rising body
+            // (lerp current→placement) so the legs reach the ground as it stands up.
+            quat.copy(mite.quaternion, mite.body.quaternion);
+            footPlacement(mite, physics.world, mites.groundFilter);
+            for (const leg of mite.legs) {
+                vec3.lerp(leg.current, leg.current, leg.footPlacement, Math.min(dt * 12, 1));
+            }
+            solveLegs(mite);
+            mite.smoothSpeed += (0 - mite.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
+            mite.armPhase = (mite.armPhase + dt * ARM_SWING_FREQ_BASE) % 1;
+            solveArms(mite);
+            for (let i = 0; i < mite.eyes.length; i++) {
+                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
+                updateEye(mite.eyes[i], _eyeWorld, dt);
+            }
+            writeMite(mites.mesh, mite);
+            continue;
+        }
 
         footPlacement(mite, physics.world, mites.groundFilter);
         stepping(mite, dt);

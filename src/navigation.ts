@@ -12,7 +12,7 @@ import { crowd } from 'navcat/blocks';
 import { createNavMeshHelper, type DebugObject } from 'navcat/three';
 import * as THREE from 'three';
 
-const NAVMESH_URL = '/navmesh.json';
+import { NAVMESH_URL } from './scene';
 
 const CROWD_MAX_AGENT_RADIUS = 0.1;
 const FIND_HALF_EXTENTS: Vec3 = [0.5, 1, 0.5];
@@ -85,6 +85,10 @@ export function makeAgentParams(radius: number, height: number, maxSpeed: number
 export function addCrowdAgent(navigation: Navigation, position: Vec3, params: crowd.AgentParams): string | null {
     if (!navigation.crowd || !navigation.navMesh) return null;
     return crowd.addAgent(navigation.crowd, navigation.navMesh, position, params);
+}
+
+export function removeCrowdAgent(navigation: Navigation, agentId: string): void {
+    if (navigation.crowd) crowd.removeAgent(navigation.crowd, agentId);
 }
 
 // Snap a world point onto the nearest navmesh poly. Returns false if none is

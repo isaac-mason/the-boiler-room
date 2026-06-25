@@ -1,8 +1,12 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 
-// Where the flickering tint originates from, in world space.
-export const LIGHT_ORIGIN = new THREE.Vector3(-1.6, 0.09, -2.44);
+import type { Furnace } from './furnace';
+import { FIRE_ORIGIN } from './scene';
+
+// Where the flickering tint originates from, in world space (as a THREE.Vector3
+// for the SDF lights; the source of truth is FIRE_ORIGIN in scene.ts).
+export const LIGHT_ORIGIN = new THREE.Vector3(FIRE_ORIGIN[0], FIRE_ORIGIN[1], FIRE_ORIGIN[2]);
 
 const RADIUS = 4;
 
@@ -29,9 +33,8 @@ const INTENSITY = 0.1;
 
 const BASE_HUE = 0.06; // warm orange
 
-// Resting (unfed) → fed (a coal in the fire). The flare lerps rest → fed, so the
-// fire sits dim normally and swells to the "fed" level when coal is thrown in.
-// (Fed values were the old resting values — this is the rebase.)
+// Resting (unfed) → fed (a coal in the fire). The fire sits dim normally and
+// swells to the "fed" level driven by the shared furnace intensity (furnace.ts).
 const BASE_LIGHTNESS_REST = 0.04;
 const BASE_LIGHTNESS_FED = 0.12;
 
@@ -57,20 +60,7 @@ export type Lighting = {
     coreHelper: THREE.Mesh;
     /** Real point light at the same spot, for lighting non-splat meshes. Add to your scene. */
     pointLight: THREE.PointLight;
-    /** Flare "fuel" — set when fed coal, released slowly (sustained brightening). */
-    flare: number;
-    /** Smoothed visible flare level (attack/release toward `flare`). */
-    flareLevel: number;
 };
-
-const FLARE_RELEASE = 0.985; // per-frame fuel decay — slow, so the brightening sustains
-const FLARE_SMOOTH = 0.12; // how fast the visible level chases the fuel (attack + ease-out)
-const FLARE_MAX = 2.5;
-
-// Feed the fire — add fuel for a sustained brightening (e.g. when a coal is thrown in).
-export function flareLighting(lighting: Lighting, amount = 1): void {
-    lighting.flare = Math.min(lighting.flare + amount, FLARE_MAX);
-}
 
 export function initLighting(): Lighting {
     // ADD_RGBA additively tints splats inside the SDF, like the dynamic-lighting example.
@@ -127,18 +117,16 @@ export function initLighting(): Lighting {
     const pointLight = new THREE.PointLight(POINT_LIGHT_COLOR, POINT_LIGHT_REST);
     pointLight.position.copy(LIGHT_ORIGIN);
 
-    return { layer, light, coreLayer, core, helper, coreHelper, pointLight, flare: 0, flareLevel: 0 };
+    return { layer, light, coreLayer, core, helper, coreHelper, pointLight };
 }
 
 // Flicker the light's colour by stacking sine waves at different speeds for a
-// chaotic, fire-like wobble. showHelper toggles the debug wireframe sphere.
-export function updateLighting(lighting: Lighting, time: number, showHelper: boolean): void {
+// chaotic, fire-like wobble. The "fed" baseline tracks the shared furnace
+// intensity; the blast pulse pops the hot core. showHelper toggles the wireframe.
+export function updateLighting(lighting: Lighting, furnace: Furnace, time: number, showHelper: boolean): void {
     const f = flicker(time);
 
-    // Fuel releases slowly; the visible level eases toward it (quick swell, gentle fade).
-    lighting.flare *= FLARE_RELEASE;
-    lighting.flareLevel += (lighting.flare - lighting.flareLevel) * FLARE_SMOOTH;
-    const fed = THREE.MathUtils.clamp(lighting.flareLevel, 0, 1); // 0 = resting, 1 = fully fed
+    const fed = THREE.MathUtils.clamp(furnace.intensity, 0, 1); // 0 = resting, 1 = fully fed
 
     // Baseline lerps rest → fed; the flicker wobbles on top.
     const hue = BASE_HUE + f * 0.04 * INTENSITY;
@@ -151,8 +139,9 @@ export function updateLighting(lighting: Lighting, time: number, showHelper: boo
     lighting.pointLight.intensity = baseIntensity * (1 + f * POINT_LIGHT_FLICKER);
 
     // Hot core: much brighter, whiter, and flickering harder than the broad glow.
+    // The blast pulse pops it white-hot the instant a coal lands.
     const coreLightness = THREE.MathUtils.clamp(
-        THREE.MathUtils.lerp(CORE_LIGHTNESS_REST, CORE_LIGHTNESS_FED, fed) + f * 0.5 * INTENSITY,
+        THREE.MathUtils.lerp(CORE_LIGHTNESS_REST, CORE_LIGHTNESS_FED, fed) + furnace.pulse * 0.3 + f * 0.5 * INTENSITY,
         0,
         1,
     );

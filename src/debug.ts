@@ -2,6 +2,8 @@ import { debug as ccDebug, type World } from 'crashcat';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import type { Furnace } from './furnace';
+
 export type DebugOverlay = {
     element: HTMLDivElement;
     text: HTMLDivElement;
@@ -13,6 +15,8 @@ export type DebugOverlay = {
     showNavMesh: boolean;
     /** Whether the SDF light wireframes are drawn (toggled by the checkbox). */
     showLights: boolean;
+    /** Debug furnace intensity override: 0..1 forces all VFX to that heat, null = live. */
+    furnaceOverride: number | null;
     /** Line segments rendering the crashcat physics debug wireframe. Add to your scene. */
     physicsLines: THREE.LineSegments;
     /** Raycaster used for click-to-raycast against the scene. */
@@ -30,6 +34,27 @@ function createCheckbox(label: string, onChange: (checked: boolean) => void): HT
     input.type = 'checkbox';
     input.addEventListener('change', () => onChange(input.checked));
     wrapper.append(input, label);
+    return wrapper;
+}
+
+// A checkbox + range slider on one row. The checkbox arms the override; the
+// slider value is reported via onChange only while armed (else `null` = live).
+function createSlider(label: string, onChange: (value: number | null) => void): HTMLLabelElement {
+    const wrapper = document.createElement('label');
+    wrapper.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none';
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = '0';
+    range.max = '1';
+    range.step = '0.01';
+    range.value = '0';
+    range.style.width = '90px';
+    const emit = () => onChange(toggle.checked ? Number(range.value) : null);
+    toggle.addEventListener('change', emit);
+    range.addEventListener('input', emit);
+    wrapper.append(toggle, label, range);
     return wrapper;
 }
 
@@ -73,6 +98,7 @@ export function createDebugOverlay(): DebugOverlay {
         showPhysics: false,
         showNavMesh: false,
         showLights: false,
+        furnaceOverride: null,
         physicsLines,
         raycaster: new THREE.Raycaster(),
         raycastMarker,
@@ -92,9 +118,13 @@ export function createDebugOverlay(): DebugOverlay {
         overlay.showLights = checked;
     });
 
+    const furnaceSlider = createSlider('furnace heat', (value) => {
+        overlay.furnaceOverride = value;
+    });
+
     overlay.text.style.cssText = 'white-space:pre;user-select:text;-webkit-user-select:text;cursor:text';
 
-    element.append(physicsCheckbox, navmeshCheckbox, lightsCheckbox, overlay.text);
+    element.append(physicsCheckbox, navmeshCheckbox, lightsCheckbox, furnaceSlider, overlay.text);
     document.body.appendChild(element);
 
     window.addEventListener('keydown', (event) => {
@@ -136,16 +166,22 @@ export function attachDebugRaycast(
     });
 }
 
-export function updateDebugOverlay(overlay: DebugOverlay, camera: THREE.PerspectiveCamera, controls: OrbitControls): void {
+export function updateDebugOverlay(
+    overlay: DebugOverlay,
+    camera: THREE.PerspectiveCamera,
+    controls: OrbitControls,
+    furnace: Furnace,
+): void {
     if (!overlay.enabled) return;
 
     const p = camera.position;
     const t = controls.target;
     const h = overlay.lastHit;
     overlay.text.textContent =
-        `pos    ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}\n` +
-        `target ${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}\n` +
-        `hit    ${h ? `${h.x.toFixed(2)}, ${h.y.toFixed(2)}, ${h.z.toFixed(2)}` : '-'}`;
+        `pos     ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}\n` +
+        `target  ${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}\n` +
+        `hit     ${h ? `${h.x.toFixed(2)}, ${h.y.toFixed(2)}, ${h.z.toFixed(2)}` : '-'}\n` +
+        `furnace int ${furnace.intensity.toFixed(2)}  pulse ${furnace.pulse.toFixed(2)}`;
 }
 
 // Rebuild the physics wireframe from the crashcat debug helpers (flat line segments).
