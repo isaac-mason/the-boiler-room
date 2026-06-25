@@ -4,7 +4,7 @@
 
 # the-boiler-room
 
-A Gaussian-splat scene that's *alive*: physics, a navmesh crowd of little coal-hauling creatures, and fire VFX, all running on top of a [Spark](https://github.com/sparkjsdev/spark) splat in the browser. Built to fork as a starter for interactive splat worlds.
+A Gaussian-splat scene that's *alive*: physics, a navmesh crowd of little coal-hauling creatures, and fire VFX, all running on a [Spark](https://github.com/sparkjsdev/spark) splat in the browser. Fork it as a starter for your own interactive splat worlds.
 
 ## Stack
 
@@ -25,7 +25,7 @@ A Gaussian-splat scene that's *alive*: physics, a navmesh crowd of little coal-h
 
 - **Node.js** 24+ (Vite 8, plus native `Float16Array` for the asset build scripts)
 - **pnpm** (the repo ships a `pnpm-lock.yaml`; npm/yarn work too)
-- Building a fresh LOD splat additionally needs a **Rust toolchain** (see [Asset pipeline](#asset-pipeline-from-marble-to-the-browser)); not required just to run the bundled scene.
+- A **Rust toolchain** is only needed to build a fresh LOD splat (see [Asset pipeline](#asset-pipeline-from-marble-to-the-browser)), not to run the bundled scene.
 
 ### Install & run
 
@@ -52,11 +52,11 @@ pnpm check        # biome check --write (autofix)
 
 The scene is built up in layers, each one adding to the one below it:
 
-- **A splat to look at.** Spark renders the Gaussian splat, but it's *only* visuals; it has no notion of solid ground or walls. Everything below gives it those.
+- **A splat world made in Marble.** Spark renders the Gaussian splat, but it's *only* visuals; it has no notion of solid ground or walls. Everything below gives it those.
 - **A physics world** (crashcat, `src/physics.ts`). The baked collider (`public/collider.bin`) is loaded as one static triangle-mesh body, so the room is solid. Coal are dynamic rigid bodies that fall, roll, and collide against it.
 - **A navigation mesh** (navcat, `src/navigation.ts`). The baked navmesh (`public/navmesh.json`) is rebuilt into a `NavMesh` describing every walkable surface: the floor plan the creatures are allowed to move on. (Both this and the collider above are baked offline from the raw `assets/*_collider.glb`; see [Asset pipeline](#asset-pipeline-from-marble-to-the-browser).)
 - **A navcat crowd** for the creatures. It sits on top of the navmesh and steers agents across it with path-following and local avoidance, so they don't clip through walls or pile into each other.
-- **The creatures** ("mites", `src/mites.ts`). GPU-instanced bodies, each driven by a crowd agent for *where it walks* and [FABRIK](https://en.wikipedia.org/wiki/FABRIK) arms for *what it reaches*. A behaviour state machine (`seek → grab → carry → throw`, `src/behavior.ts`) loops them between the coal pile and the boiler. Knock one with a click and it drops out of the crowd into a physics ragdoll.
+- **The creatures** (`src/creatures.ts`). GPU-instanced bodies, each driven by a crowd agent for *where it walks* and [FABRIK](https://en.wikipedia.org/wiki/FABRIK) arms for *what it reaches*. A behaviour state machine (`seek → grab → carry → throw`, `src/behavior.ts`) loops them between the coal pile and the boiler. Knock one with a click and it drops out of the crowd into a physics ragdoll.
 - **The fire.** A single **furnace signal** (`src/furnace.ts`) is the source of truth for "how hot is the fire right now." Throwing a coal in spikes it, and the **lighting**, **heat shimmer**, **dust glow**, and **embers** all read that one value, so every effect swells together.
 
 The loading overlay stays up until splats are genuinely on screen: it watches `SparkRenderer.activeSplats` climb past a fraction of the model's total rather than guessing with a timer (`SPLAT_READY_FRACTION`).
@@ -76,7 +76,7 @@ From a generated world, use the download menu to export **two** files:
 
 ### 2. Drop them in `assets/`
 
-`assets/` is gitignored and never served; it's just the source for the build steps. Name the pair so they're easy to pass along, e.g.:
+`assets/` is gitignored and never served; it's just the source for the build steps. Name the pair so they're easy to pass to the scripts, e.g.:
 
 ```
 assets/
@@ -104,7 +104,7 @@ pnpm build:navmesh    assets/MyScene_collider.glb  # → public/navmesh.json    
 
 ## Template customization
 
-Everything specific to this scene lives in one file, **[`src/scene.ts`](src/scene.ts)**. After building your assets (above), point it at them and retune the placements:
+Everything specific to this scene lives in one file, **[`src/scene.ts`](src/scene.ts)**. Once your assets are built (above), update these to match your world:
 
 | Constant | What it is |
 | --- | --- |

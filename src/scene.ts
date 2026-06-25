@@ -17,7 +17,7 @@ export const CAMERA_TARGET: Vec3 = [-0.47, 0.38, -0.59];
 // --- World landmarks (world-space) ---
 export const FIRE_ORIGIN: Vec3 = [-1.6, 0.09, -2.44]; // boiler fire — drives lighting, heat shimmer, dust
 export const CLUMP: Vec3 = [0.82, -0.01, -1.8]; // where coal spawns + is picked up
-export const DROPOFF: Vec3 = [-1.48, 0.05, -2.33]; // where mites stop to throw (close to the boiler)
+export const DROPOFF: Vec3 = [-1.48, 0.05, -2.33]; // where creatures stop to throw (close to the boiler)
 export const BOILER: Vec3 = [-1.68, 0.15, -2.3]; // throw target (boiler mouth)
 export const SPARK_ORIGIN: Vec3 = [-1.55, 0.2, -2.45]; // where embers fly out of the fire
 
@@ -27,4 +27,4 @@ export const FLOOR_HALF_EXTENTS: Vec3 = [5, 0.1, 5]; // catch-plane footprint un
 
 // --- Population & scale ---
 export const COAL_COUNT = 24; // lumps in the starting pile
-export const MITE_COUNT = 20; // creatures hauling coal
+export const CREATURE_COUNT = 20; // creatures hauling coal

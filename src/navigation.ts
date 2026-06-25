@@ -63,7 +63,7 @@ export async function loadNavigation(navigation: Navigation): Promise<void> {
 
 const _nearest = createFindNearestPolyResult();
 
-// Default agent params for a mite of the given radius/height/speed.
+// Default agent params for a creature of the given radius/height/speed.
 export function makeAgentParams(radius: number, height: number, maxSpeed: number): crowd.AgentParams {
     return {
         radius,
@@ -92,7 +92,7 @@ export function removeCrowdAgent(navigation: Navigation, agentId: string): void 
 }
 
 // Snap a world point onto the nearest navmesh poly. Returns false if none is
-// within the search box. Also used by recovery (re-grounding an off-mesh mite).
+// within the search box. Also used by recovery (re-grounding an off-mesh creature).
 export function snapToNavMesh(navigation: Navigation, point: Vec3, out: Vec3): boolean {
     if (!navigation.navMesh) return false;
     findNearestPoly(_nearest, navigation.navMesh, point, FIND_HALF_EXTENTS, DEFAULT_QUERY_FILTER);

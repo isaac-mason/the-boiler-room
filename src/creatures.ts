@@ -1,4 +1,4 @@
-// Crawler "dust mites" — a faithful port of the crawler sketch's physics + IK
+// Crawler "dust creatures" — a faithful port of the crawler sketch's physics + IK
 // controller (sketches/crawler), scaled down, rendered instanced with a single
 // THREE.BatchedMesh, with two added top arms. Steering/navmesh/behaviour come later.
 //
@@ -34,29 +34,29 @@ import {
     snapToNavMesh,
 } from './navigation';
 import { OBJECT_LAYER_MOVING, type Physics } from './physics';
-import { CLUMP, DROPOFF, MITE_COUNT } from './scene';
+import { CLUMP, CREATURE_COUNT, DROPOFF } from './scene';
 
-/* ---------------- config (all spatial dims scaled by MITE_SCALE) ---------------- */
+/* ---------------- config (all spatial dims scaled by CREATURE_SCALE) ---------------- */
 
-const MITE_SCALE = 0.06;
+const CREATURE_SCALE = 0.06;
 
-const BODY_RADIUS = 0.5 * MITE_SCALE;
-const HEIGHT = 1.2 * MITE_SCALE; // body-centre ride height above the floor (a smidge lower → slightly more crouched)
+const BODY_RADIUS = 0.5 * CREATURE_SCALE;
+const HEIGHT = 1.2 * CREATURE_SCALE; // body-centre ride height above the floor (a smidge lower → slightly more crouched)
 
 const N_LEGS = 2;
 const LEG_SEGMENTS = 4; // more joints → curvier, organic creature legs
-const LEG_LENGTH = 1.25 * MITE_SCALE; // a little longer than the hip→ground reach → gentle bend, some slack
-const ATTACH_RADIUS = 0.28 * MITE_SCALE; // hips close together under the body
-const FOOT_RADIUS = 0.38 * MITE_SCALE; // feet roughly under the hips (a stance), not splayed out
-const LEG_RADIUS = 0.05 * MITE_SCALE;
+const LEG_LENGTH = 1.25 * CREATURE_SCALE; // a little longer than the hip→ground reach → gentle bend, some slack
+const ATTACH_RADIUS = 0.28 * CREATURE_SCALE; // hips close together under the body
+const FOOT_RADIUS = 0.38 * CREATURE_SCALE; // feet roughly under the hips (a stance), not splayed out
+const LEG_RADIUS = 0.05 * CREATURE_SCALE;
 const LEG_IK_ITERATIONS = 6; // FABRIK passes per frame (reset each frame; longer chain needs more)
 const LEG_JOINT_ROTOR = Math.PI / 2; // per-joint ball-constraint limit (back to loose — tight looked bad)
-const LEG_ATTACH_Y = -0.3 * MITE_SCALE; // hips low-ish → legs come from the lower body (not so low it over-slacks)
+const LEG_ATTACH_Y = -0.3 * CREATURE_SCALE; // hips low-ish → legs come from the lower body (not so low it over-slacks)
 
 const N_ARMS = 2;
 const ARM_SEGMENTS = 4; // more joints → noodly, expressive arms
-const ARM_LENGTH = 1.4 * MITE_SCALE;
-const ARM_RADIUS = 0.06 * MITE_SCALE;
+const ARM_LENGTH = 1.4 * CREATURE_SCALE;
+const ARM_RADIUS = 0.06 * CREATURE_SCALE;
 const ARM_IK_ITERATIONS = 5; // warm-started, but the longer chain needs a few more passes
 const ARM_JOINT_ROTOR = Math.PI / 2; // looser ball limit → noodly, expressive arms
 // Idle (not-carrying) arm swing — a smooth fore/aft walk-pump (driven off smoothed
@@ -74,20 +74,20 @@ const ARM_U_LIFT = 0.9; // hand lifts this much at the fore/aft extremes → the
 // Time-based gait: each leg steps once per gait cycle on a schedule (no distance
 // thresholds / emergency re-plants — those caused frantic stepping). Cadence
 // scales with speed so the planted foot doesn't slip; stride = speed / cadence.
-const STEP_ARC_HEIGHT = 0.1 * MITE_SCALE;
+const STEP_ARC_HEIGHT = 0.1 * CREATURE_SCALE;
 const STEP_CADENCE_BASE = 2.5; // gait cycles/sec when standing still
 const STEP_CADENCE_GAIN = 9; // extra cycles/sec per unit of body speed (lower → fewer, larger steps)
 const STEP_DURATION_FRAC = 0.45; // a step swing takes this fraction of a cycle (the rest is planted)
 const STEP_LEAD_FRACTION = 0.35; // foot lands this fraction of a stride ahead; it then recedes ~0.55 → swings well behind too
-const STEP_LEAD_MAX = 0.45 * MITE_SCALE; // but never lead by more than this — else the leg over-extends
+const STEP_LEAD_MAX = 0.45 * CREATURE_SCALE; // but never lead by more than this — else the leg over-extends
 
 // Carrying a coal: sell the struggle — laboured low cadence (→ fewer, longer
 // lunges), dragging feet, body crushed down.
 const CARRY_CADENCE_MULT = 0.35; // slower step cadence while burdened → fewer, wider strides
 const CARRY_ARC_MULT = 0.35; // feet barely lift (heavy, dragging)
-const CRUSH_PER_LOAD = 0.2 * MITE_SCALE; // body sinks this much per unit of coal size (heavier = lower)
+const CRUSH_PER_LOAD = 0.2 * CREATURE_SCALE; // body sinks this much per unit of coal size (heavier = lower)
 const CARRY_FOOT_SPLAY = 0.45; // feet splay out this much per unit of load → wide stance keeps legs taut under the crush
-const CARRY_STEP_LEAD = 0.65 * MITE_SCALE; // each lunge reaches this far ahead (wide footsteps)
+const CARRY_STEP_LEAD = 0.65 * CREATURE_SCALE; // each lunge reaches this far ahead (wide footsteps)
 
 // Crowd agent + kinematic ground-follow.
 const AGENT_RADIUS = 0.05;
@@ -104,11 +104,11 @@ const RAGDOLL_SETTLE_SPEED = 0.15; // recover once the tumbling body slows below
 const RAGDOLL_PUSH = 2.5; // launch speed along the click direction (m/s)
 const RAGDOLL_PUSH_UP = 2.0; // upward kick (m/s)
 const RAGDOLL_SPIN = 18; // tumble angular velocity magnitude (rad/s)
-const RAGDOLL_FLAIL = 0.3; // limb-target jitter while ragdolling (× MITE_SCALE)
+const RAGDOLL_FLAIL = 0.3; // limb-target jitter while ragdolling (× CREATURE_SCALE)
 const GETUP_DURATION = 0.7; // seconds to animate from the tumbled pose back to standing
 
-const EYE_RADIUS = 0.14 * MITE_SCALE;
-const IRIS_RADIUS = 0.05 * MITE_SCALE;
+const EYE_RADIUS = 0.14 * CREATURE_SCALE;
+const IRIS_RADIUS = 0.05 * CREATURE_SCALE;
 const N_EYES = 2;
 
 // Googly-eye pupil physics (in eye-local normalised units: disc radius = 1).
@@ -123,9 +123,9 @@ const EYE_RESTITUTION = 0.5; // bounce off the eye rim
 const SPAWN_CENTER: Vec3 = [-0.75, -0.04, -2.01];
 const SPAWN_RADIUS = 0.7; // horizontal spread (snapped onto the navmesh)
 
-const INSTANCES_PER_MITE = 1 + N_LEGS * LEG_SEGMENTS + N_ARMS * ARM_SEGMENTS + N_EYES * 2;
+const INSTANCES_PER_CREATURE = 1 + N_LEGS * LEG_SEGMENTS + N_ARMS * ARM_SEGMENTS + N_EYES * 2;
 
-/* ---------------- limb definitions (shared by every mite) ---------------- */
+/* ---------------- limb definitions (shared by every creature) ---------------- */
 
 type LimbDef = {
     attachment: Vec3; // base, in body-local space
@@ -154,7 +154,7 @@ const LEG_DEFS: LimbDef[] = Array.from({ length: N_LEGS }, (_, i) => {
 
 const ARM_DEFS: LimbDef[] = Array.from({ length: N_ARMS }, (_, i) => {
     const side = i === 0 ? -1 : 1;
-    const attachment: Vec3 = [side * 0.32 * MITE_SCALE, -0.1 * MITE_SCALE, 0.05 * MITE_SCALE];
+    const attachment: Vec3 = [side * 0.32 * CREATURE_SCALE, -0.1 * CREATURE_SCALE, 0.05 * CREATURE_SCALE];
     // Rest pose reaches out to the SIDE (slightly forward + down) at ~85% arm
     // length, so the arms sit at the body's sides where they're visible (and the
     // near-straight chain has no ambiguous elbow fold for FABRIK to flip).
@@ -165,8 +165,8 @@ const ARM_DEFS: LimbDef[] = Array.from({ length: N_ARMS }, (_, i) => {
 
 // Eyes, body-local: centred on the body height, bulging out past the front face.
 const EYE_OFFSETS: Vec3[] = [
-    [-0.18 * MITE_SCALE, 0, 0.56 * MITE_SCALE],
-    [0.18 * MITE_SCALE, 0, 0.56 * MITE_SCALE],
+    [-0.18 * CREATURE_SCALE, 0, 0.56 * CREATURE_SCALE],
+    [0.18 * CREATURE_SCALE, 0, 0.56 * CREATURE_SCALE],
 ];
 const EYE_QUATERNION: Quat = quat.setAxisAngle(quat.create(), [1, 0, 0], -0.15);
 
@@ -193,11 +193,11 @@ type Eye = {
     local: Vec3; // iris offset in eye plane
 };
 
-export type MiteMode = 'crowd' | 'velocity' | 'ragdoll' | 'getup';
+export type CreatureMode = 'crowd' | 'velocity' | 'ragdoll' | 'getup';
 
-export type Mite = {
+export type Creature = {
     body: RigidBody;
-    mode: MiteMode;
+    mode: CreatureMode;
     agentId: string | null; // crowd agent
     targetIndex: number; // phase-1 wander: 0 = clump, 1 = dropoff
     position: Vec3;
@@ -226,12 +226,12 @@ export type Mite = {
     eyeInstances: { white: number; iris: number }[];
 };
 
-export type Mites = {
+export type Creatures = {
     mesh: THREE.BatchedMesh;
     geo: { body: number; limb: number; eye: number };
-    list: Mite[];
+    list: Creature[];
     // Downward ground ray filter (static collider only), bound to the world, so
-    // it's created in initMites and lives here, concrete. Used for kinematic body
+    // it's created in initCreatures and lives here, concrete. Used for kinematic body
     // Y and for foot placement.
     groundFilter: Filter;
 };
@@ -245,7 +245,7 @@ const footCollector = createClosestCastRayCollector();
 const footSettings = createDefaultCastRaySettings();
 
 const UP: Vec3 = [0, 1, 0];
-const FORWARD: Vec3 = [0, 0, 1]; // body-local forward (the +Z the mite faces)
+const FORWARD: Vec3 = [0, 0, 1]; // body-local forward (the +Z the creature faces)
 const UPRIGHT: Quat = [0, 0, 0, 1]; // identity orientation (used on ragdoll recovery)
 
 const _dir: Vec3 = [0, 0, 0];
@@ -275,20 +275,20 @@ const ease = (x: number): number => -(Math.cos(Math.PI * x) - 1) / 2;
 const rand = (min: number, max: number) => min + Math.random() * (max - min);
 
 // body-local point → world: out = pos + quat·local
-function bodyToWorld(out: Vec3, local: Vec3, mite: Mite): Vec3 {
-    vec3.transformQuat(out, local, mite.quaternion);
-    out[0] += mite.position[0];
-    out[1] += mite.position[1];
-    out[2] += mite.position[2];
+function bodyToWorld(out: Vec3, local: Vec3, creature: Creature): Vec3 {
+    vec3.transformQuat(out, local, creature.quaternion);
+    out[0] += creature.position[0];
+    out[1] += creature.position[1];
+    out[2] += creature.position[2];
     return out;
 }
 
 // world point → body-local: out = quat⁻¹·(world - pos)
-function worldToBodyLocal(out: Vec3, world: Vec3, mite: Mite): Vec3 {
-    out[0] = world[0] - mite.position[0];
-    out[1] = world[1] - mite.position[1];
-    out[2] = world[2] - mite.position[2];
-    quat.conjugate(_quatConj, mite.quaternion);
+function worldToBodyLocal(out: Vec3, world: Vec3, creature: Creature): Vec3 {
+    out[0] = world[0] - creature.position[0];
+    out[1] = world[1] - creature.position[1];
+    out[2] = world[2] - creature.position[2];
+    quat.conjugate(_quatConj, creature.quaternion);
     vec3.transformQuat(out, out, _quatConj);
     return out;
 }
@@ -322,14 +322,14 @@ function makeLimbState(def: LimbDef): LimbState {
     };
 }
 
-export function initMites(physics: Physics): Mites {
+export function initCreatures(physics: Physics): Creatures {
     const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
     const limbGeo = new THREE.CylinderGeometry(1, 1, 1, 6); // unit radius/height, centred on Y
     const eyeGeo = new THREE.CircleGeometry(1, 20); // flat disc facing +Z
 
     const material = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.0, side: THREE.DoubleSide });
 
-    const maxInstances = MITE_COUNT * INSTANCES_PER_MITE;
+    const maxInstances = CREATURE_COUNT * INSTANCES_PER_CREATURE;
     const maxVerts = bodyGeo.attributes.position.count + limbGeo.attributes.position.count + eyeGeo.attributes.position.count;
     const maxIndices = (bodyGeo.index?.count ?? 0) + (limbGeo.index?.count ?? 0) + (eyeGeo.index?.count ?? 0);
 
@@ -344,23 +344,23 @@ export function initMites(physics: Physics): Mites {
     };
 
     // Ground rays should only hit the static collider, never other (kinematic)
-    // mites or (dynamic) coal.
+    // creatures or (dynamic) coal.
     const groundFilter = filter.forWorld(physics.world);
     groundFilter.bodyFilter = (b) => b.motionType === MotionType.STATIC;
 
     return { mesh, geo, list: [], groundFilter };
 }
 
-export function spawnMites(mites: Mites, physics: Physics, navigation: Navigation): void {
+export function spawnCreatures(creatures: Creatures, physics: Physics, navigation: Navigation): void {
     const agentParams = makeAgentParams(AGENT_RADIUS, HEIGHT, AGENT_MAX_SPEED);
 
-    for (let i = 0; i < MITE_COUNT; i++) {
+    for (let i = 0; i < CREATURE_COUNT; i++) {
         // uniform point in the spawn disc (sqrt for even area distribution)
         const angle = rand(0, Math.PI * 2);
         const r = SPAWN_RADIUS * Math.sqrt(Math.random());
         const sample: Vec3 = [SPAWN_CENTER[0] + Math.cos(angle) * r, SPAWN_CENTER[1], SPAWN_CENTER[2] + Math.sin(angle) * r];
 
-        // Place the mite ON the navmesh, else its crowd agent has no valid poly
+        // Place the creature ON the navmesh, else its crowd agent has no valid poly
         // and never moves. Skip samples too far from any walkable surface.
         const position: Vec3 = [0, 0, 0];
         if (!snapToNavMesh(navigation, sample, position)) continue;
@@ -387,7 +387,7 @@ export function spawnMites(mites: Mites, physics: Physics, navigation: Navigatio
             local: [0, 0, 0],
         }));
 
-        const { mesh, geo } = mites;
+        const { mesh, geo } = creatures;
         const bodyInstance = mesh.addInstance(geo.body);
         mesh.setColorAt(bodyInstance, COLOR_BODY);
 
@@ -413,7 +413,7 @@ export function spawnMites(mites: Mites, physics: Physics, navigation: Navigatio
             return { white, iris };
         });
 
-        mites.list.push({
+        creatures.list.push({
             body,
             mode: 'crowd',
             agentId,
@@ -422,7 +422,7 @@ export function spawnMites(mites: Mites, physics: Physics, navigation: Navigatio
             quaternion: [0, 0, 0, 1],
             speed: 0,
             smoothSpeed: 0,
-            armPhase: Math.random(), // desync the swing across mites
+            armPhase: Math.random(), // desync the swing across creatures
             load: 0,
             cadence: STEP_CADENCE_BASE,
             ragdollTimer: 0,
@@ -447,9 +447,9 @@ export function spawnMites(mites: Mites, physics: Physics, navigation: Navigatio
 
 // crowd/velocity mode: kinematically drive the body. XZ follows the crowd agent,
 // Y comes from a downward ground raycast (body hovers HEIGHT above the floor).
-function driveKinematic(mite: Mite, world: World, navigation: Navigation, dt: number, groundFilter: Filter): void {
-    if (!mite.agentId) return;
-    const agent = getAgent(navigation, mite.agentId);
+function driveKinematic(creature: Creature, world: World, navigation: Navigation, dt: number, groundFilter: Filter): void {
+    if (!creature.agentId) return;
+    const agent = getAgent(navigation, creature.agentId);
     if (!agent) return;
 
     const ax = agent.position[0];
@@ -470,38 +470,38 @@ function driveKinematic(mite: Mite, world: World, navigation: Navigation, dt: nu
     // Turn to face the direction of travel (yaw around Y), slerping smoothly.
     const vx = agent.velocity[0];
     const vz = agent.velocity[2];
-    mite.speed = Math.hypot(vx, vz);
-    if (mite.speed > TURN_MIN_SPEED) {
+    creature.speed = Math.hypot(vx, vz);
+    if (creature.speed > TURN_MIN_SPEED) {
         const yaw = Math.atan2(vx, vz); // angle that rotates forward (+Z) onto (vx,vz)
         quat.setAxisAngle(_targetQuat, UP, yaw);
-        quat.slerp(mite.quaternion, mite.quaternion, _targetQuat, Math.min(TURN_RATE * dt, 1));
+        quat.slerp(creature.quaternion, creature.quaternion, _targetQuat, Math.min(TURN_RATE * dt, 1));
     }
 
     // sink toward the floor when burdened — looks crushed under the coal
-    const crush = mite.load * CRUSH_PER_LOAD;
+    const crush = creature.load * CRUSH_PER_LOAD;
     const target: Vec3 = [ax, groundY + HEIGHT - crush, az];
-    rigidBody.moveKinematic(mite.body, target, mite.quaternion, dt);
-    mite.grounded = grounded;
+    rigidBody.moveKinematic(creature.body, target, creature.quaternion, dt);
+    creature.grounded = grounded;
 }
 
-function footPlacement(mite: Mite, world: World, footFilter: Filter): void {
-    const pos = mite.position;
-    for (const leg of mite.legs) {
-        if (mite.grounded) {
+function footPlacement(creature: Creature, world: World, footFilter: Filter): void {
+    const pos = creature.position;
+    for (const leg of creature.legs) {
+        if (creature.grounded) {
             // rest-foot offset (rotated by yaw) + anticipation ahead along travel,
             // so the foot plants where the body is GOING — centres the gait, no trailing.
             // Carrying splays the stance wider so the legs stay taut under the crush.
-            const splay = 1 + mite.load * CARRY_FOOT_SPLAY;
+            const splay = 1 + creature.load * CARRY_FOOT_SPLAY;
             vec3.set(_dir, leg.def.restEnd[0] * splay, leg.def.restEnd[1], leg.def.restEnd[2] * splay);
-            vec3.transformQuat(_dir, _dir, mite.quaternion);
-            vec3.transformQuat(_fwd, FORWARD, mite.quaternion);
+            vec3.transformQuat(_dir, _dir, creature.quaternion);
+            vec3.transformQuat(_fwd, FORWARD, creature.quaternion);
             // lead the foot by a fraction of the current stride (= speed / cadence), so feet
             // plant AHEAD of the body proportionally at any pace, not lagging behind it.
-            const stride = mite.cadence > 0 ? mite.speed / mite.cadence : 0;
-            const lead = mite.load > 0 ? CARRY_STEP_LEAD : Math.min(stride * STEP_LEAD_FRACTION, STEP_LEAD_MAX);
-            const originY = pos[1] - 0.2 * MITE_SCALE + HEIGHT / 2;
+            const stride = creature.cadence > 0 ? creature.speed / creature.cadence : 0;
+            const lead = creature.load > 0 ? CARRY_STEP_LEAD : Math.min(stride * STEP_LEAD_FRACTION, STEP_LEAD_MAX);
+            const originY = pos[1] - 0.2 * CREATURE_SCALE + HEIGHT / 2;
             const origin: Vec3 = [pos[0] + _dir[0] + _fwd[0] * lead, originY, pos[2] + _dir[2] + _fwd[2] * lead];
-            const rayLength = 10 * MITE_SCALE;
+            const rayLength = 10 * CREATURE_SCALE;
             footCollector.reset();
             castRay(world, footCollector, footSettings, origin, [0, -1, 0], rayLength, footFilter);
             const hitDistance =
@@ -510,20 +510,20 @@ function footPlacement(mite: Mite, world: World, footFilter: Filter): void {
         } else {
             // airborne: splay legs outward (in body-yaw frame), bobbing
             vec3.set(_dir, leg.def.restEnd[0] - leg.def.attachment[0], 0, leg.def.restEnd[2] - leg.def.attachment[2]);
-            vec3.transformQuat(_dir, _dir, mite.quaternion);
+            vec3.transformQuat(_dir, _dir, creature.quaternion);
             vec3.normalize(_dir, _dir);
             vec3.scale(_dir, _dir, leg.def.length * 1.2);
             vec3.add(leg.footPlacement, pos, _dir);
-            leg.footPlacement[1] += Math.sin(performance.now() / 100 + leg.def.phaseOffset) * 0.5 * MITE_SCALE;
-            const vy = mite.body.motionProperties.linearVelocity[1];
-            leg.footPlacement[1] += remapClamp(vy, -2, 2, 0.5, -0.5) * MITE_SCALE;
+            leg.footPlacement[1] += Math.sin(performance.now() / 100 + leg.def.phaseOffset) * 0.5 * CREATURE_SCALE;
+            const vy = creature.body.motionProperties.linearVelocity[1];
+            leg.footPlacement[1] += remapClamp(vy, -2, 2, 0.5, -0.5) * CREATURE_SCALE;
         }
     }
 }
 
-function stepping(mite: Mite, dt: number): void {
-    for (const leg of mite.legs) {
-        if (!mite.grounded) {
+function stepping(creature: Creature, dt: number): void {
+    for (const leg of creature.legs) {
+        if (!creature.grounded) {
             leg.stepping = false;
             vec3.copy(leg.goal, leg.footPlacement);
             vec3.lerp(leg.current, leg.current, leg.goal, dt * 10);
@@ -532,13 +532,13 @@ function stepping(mite: Mite, dt: number): void {
 
         // detect this leg's once-per-cycle trigger as a phase wrap (robust to big
         // per-frame phase steps at sprint cadence — a window check would miss them).
-        const legPhase = (mite.stepCycleTime + leg.def.phaseOffset) % 1;
+        const legPhase = (creature.stepCycleTime + leg.def.phaseOffset) % 1;
         const wrapped = legPhase < leg.lastPhase;
         leg.lastPhase = legPhase;
 
         if (leg.stepping) {
             // swing takes STEP_DURATION_FRAC of a gait cycle, regardless of speed
-            leg.stepProgress += (dt * mite.cadence) / STEP_DURATION_FRAC;
+            leg.stepProgress += (dt * creature.cadence) / STEP_DURATION_FRAC;
             if (leg.stepProgress >= 1) {
                 leg.stepProgress = 1;
                 leg.stepping = false;
@@ -558,7 +558,7 @@ function stepping(mite: Mite, dt: number): void {
             vec3.lerp(leg.current, leg.current, leg.goal, leg.stepProgress);
             const eased = ease(leg.stepProgress);
             // carried → feet barely lift (dragging, struggling)
-            const arc = mite.load > 0 ? STEP_ARC_HEIGHT * CARRY_ARC_MULT : STEP_ARC_HEIGHT;
+            const arc = creature.load > 0 ? STEP_ARC_HEIGHT * CARRY_ARC_MULT : STEP_ARC_HEIGHT;
             if (eased > 0 && eased < 1) leg.current[1] += Math.sin(eased * Math.PI) * arc;
         }
     }
@@ -592,26 +592,26 @@ function solveLimb(limb: LimbState, targetLocal: Vec3, reset: boolean, iteration
     fabrikFixedIterations(limb.chain, def.attachment, targetLocal, iterations);
 }
 
-function solveLegs(mite: Mite): void {
-    for (const leg of mite.legs) {
-        worldToBodyLocal(_targetLocal, leg.current, mite);
+function solveLegs(creature: Creature): void {
+    for (const leg of creature.legs) {
+        worldToBodyLocal(_targetLocal, leg.current, creature);
         solveLimb(leg, _targetLocal, true, LEG_IK_ITERATIONS); // FABRIK: organic creature-leg bend
     }
 }
 
-function solveArms(mite: Mite): void {
-    for (let i = 0; i < mite.arms.length; i++) {
-        const arm = mite.arms[i];
+function solveArms(creature: Creature): void {
+    for (let i = 0; i < creature.arms.length; i++) {
+        const arm = creature.arms[i];
         if (arm.worldTarget) {
             // Reach a world point — into the body's (yawed) local frame for the IK.
-            worldToBodyLocal(_targetLocal, arm.worldTarget, mite);
+            worldToBodyLocal(_targetLocal, arm.worldTarget, creature);
         } else {
             // not carrying: aim the hand a near-full-arm-length away from the shoulder,
             // out + down, swinging fore/aft. Keeping it near full extension means the
             // long noodly arm stays taut and just POINTS — no chaotic folding.
             const side = i === 0 ? -1 : 1;
-            const swing = Math.sin((mite.armPhase + i * 0.5) * Math.PI * 2); // −1..1, arms opposite
-            const speedFrac = Math.min(mite.smoothSpeed / AGENT_MAX_SPEED, 1);
+            const swing = Math.sin((creature.armPhase + i * 0.5) * Math.PI * 2); // −1..1, arms opposite
+            const speedFrac = Math.min(creature.smoothSpeed / AGENT_MAX_SPEED, 1);
             const swingAmt = ARM_SWING_AMP_BASE + ARM_SWING_AMP_GAIN * speedFrac;
             const fore = swing * swingAmt; // fore/aft, bigger when moving
             // 'U' arc: the hand lifts at the fore/aft extremes (swing²) and dips through
@@ -677,17 +677,17 @@ function setInstance(mesh: THREE.BatchedMesh, id: number, position: Vec3, rotati
     mesh.setMatrixAt(id, _m4three);
 }
 
-function writeLimb(mesh: THREE.BatchedMesh, mite: Mite, chain: Chain, ids: number[], radius: number): void {
+function writeLimb(mesh: THREE.BatchedMesh, creature: Creature, chain: Chain, ids: number[], radius: number): void {
     for (let i = 0; i < chain.bones.length; i++) {
         const b = chain.bones[i];
         // bone midpoint (body-local) → world by the body yaw
         _mid[0] = (b.start[0] + b.end[0]) * 0.5;
         _mid[1] = (b.start[1] + b.end[1]) * 0.5;
         _mid[2] = (b.start[2] + b.end[2]) * 0.5;
-        bodyToWorld(_mid, _mid, mite);
+        bodyToWorld(_mid, _mid, creature);
         // bone direction (body-local) → world by the body yaw
         vec3.sub(_dir, b.end, b.start);
-        vec3.transformQuat(_dir, _dir, mite.quaternion);
+        vec3.transformQuat(_dir, _dir, creature.quaternion);
         vec3.normalize(_dir, _dir);
         quat.rotationTo(_q, UP, _dir);
         vec3.set(_scaleV, radius, b.length, radius);
@@ -695,28 +695,30 @@ function writeLimb(mesh: THREE.BatchedMesh, mite: Mite, chain: Chain, ids: numbe
     }
 }
 
-function writeMite(mesh: THREE.BatchedMesh, mite: Mite): void {
-    const pos = mite.position;
+function writeCreature(mesh: THREE.BatchedMesh, creature: Creature): void {
+    const pos = creature.position;
 
     // body
     vec3.set(_scaleV, BODY_RADIUS, BODY_RADIUS, BODY_RADIUS);
-    setInstance(mesh, mite.bodyInstance, pos, mite.quaternion, _scaleV);
+    setInstance(mesh, creature.bodyInstance, pos, creature.quaternion, _scaleV);
 
     // legs + arms
-    for (let i = 0; i < mite.legs.length; i++) writeLimb(mesh, mite, mite.legs[i].chain, mite.legInstances[i], LEG_RADIUS);
-    for (let i = 0; i < mite.arms.length; i++) writeLimb(mesh, mite, mite.arms[i].chain, mite.armInstances[i], ARM_RADIUS);
+    for (let i = 0; i < creature.legs.length; i++)
+        writeLimb(mesh, creature, creature.legs[i].chain, creature.legInstances[i], LEG_RADIUS);
+    for (let i = 0; i < creature.arms.length; i++)
+        writeLimb(mesh, creature, creature.arms[i].chain, creature.armInstances[i], ARM_RADIUS);
 
     // eyes — offset + facing rotated by the body yaw
-    quat.mul(_eyeQuat, mite.quaternion, EYE_QUATERNION);
-    for (let i = 0; i < mite.eyes.length; i++) {
-        const inst = mite.eyeInstances[i];
-        bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
+    quat.mul(_eyeQuat, creature.quaternion, EYE_QUATERNION);
+    for (let i = 0; i < creature.eyes.length; i++) {
+        const inst = creature.eyeInstances[i];
+        bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
 
         vec3.set(_scaleV, EYE_RADIUS, EYE_RADIUS, EYE_RADIUS);
         setInstance(mesh, inst.white, _eyeWorld, _eyeQuat, _scaleV);
 
         // iris: offset within the eye plane (jiggle) + slightly proud of the surface
-        vec3.set(_iris, mite.eyes[i].local[0] * EYE_RADIUS, mite.eyes[i].local[1] * EYE_RADIUS, EYE_RADIUS * 0.15);
+        vec3.set(_iris, creature.eyes[i].local[0] * EYE_RADIUS, creature.eyes[i].local[1] * EYE_RADIUS, EYE_RADIUS * 0.15);
         vec3.transformQuat(_iris, _iris, _eyeQuat);
         vec3.add(_iris, _iris, _eyeWorld);
         vec3.set(_scaleV, IRIS_RADIUS, IRIS_RADIUS, IRIS_RADIUS);
@@ -726,42 +728,42 @@ function writeMite(mesh: THREE.BatchedMesh, mite: Mite): void {
 
 /* ---------------- ragdoll (pointer interaction) ---------------- */
 
-// Knock a mite over: body → dynamic, launched along `dir` with a tumble spin.
+// Knock a creature over: body → dynamic, launched along `dir` with a tumble spin.
 // Re-callable while ragdolling (re-kick). The behaviour drops any carried coal.
-export function ragdollMite(mite: Mite, navigation: Navigation, world: World, dir: Vec3): void {
-    if (mite.mode !== 'ragdoll') {
-        if (mite.agentId) {
-            removeCrowdAgent(navigation, mite.agentId);
-            mite.agentId = null;
+export function ragdollCreature(creature: Creature, navigation: Navigation, world: World, dir: Vec3): void {
+    if (creature.mode !== 'ragdoll') {
+        if (creature.agentId) {
+            removeCrowdAgent(navigation, creature.agentId);
+            creature.agentId = null;
         }
-        rigidBody.setMotionType(world, mite.body, MotionType.DYNAMIC, true);
-        mite.mode = 'ragdoll';
-        mite.load = 0;
-        setArmTarget(mite, 0, null);
-        setArmTarget(mite, 1, null);
+        rigidBody.setMotionType(world, creature.body, MotionType.DYNAMIC, true);
+        creature.mode = 'ragdoll';
+        creature.load = 0;
+        setArmTarget(creature, 0, null);
+        setArmTarget(creature, 1, null);
     }
     // Shove horizontally (away from the camera) + a consistent upward pop, so the
     // knockover never depends on camera angle — a top-down ray would otherwise
-    // cancel the lift and just bury the mite in the floor.
+    // cancel the lift and just bury the creature in the floor.
     const hlen = Math.hypot(dir[0], dir[2]) || 1;
-    rigidBody.setLinearVelocity(world, mite.body, [
+    rigidBody.setLinearVelocity(world, creature.body, [
         (dir[0] / hlen) * RAGDOLL_PUSH,
         RAGDOLL_PUSH_UP,
         (dir[2] / hlen) * RAGDOLL_PUSH,
     ]);
-    rigidBody.setAngularVelocity(world, mite.body, [
+    rigidBody.setAngularVelocity(world, creature.body, [
         (Math.random() * 2 - 1) * RAGDOLL_SPIN,
         (Math.random() * 2 - 1) * RAGDOLL_SPIN,
         (Math.random() * 2 - 1) * RAGDOLL_SPIN,
     ]);
-    mite.ragdollTimer = 0;
+    creature.ragdollTimer = 0;
 }
 
 // Settled — begin the animated get-up: body → kinematic, captured tumbled pose
 // lerps to standing (over GETUP_DURATION) before the agent re-attaches.
-function startGetup(mite: Mite, navigation: Navigation, world: World, groundFilter: Filter): void {
-    const snapped: Vec3 = [mite.body.position[0], mite.body.position[1], mite.body.position[2]];
-    snapToNavMesh(navigation, mite.body.position, snapped); // leaves `snapped` as-is if off-mesh
+function startGetup(creature: Creature, navigation: Navigation, world: World, groundFilter: Filter): void {
+    const snapped: Vec3 = [creature.body.position[0], creature.body.position[1], creature.body.position[2]];
+    snapToNavMesh(navigation, creature.body.position, snapped); // leaves `snapped` as-is if off-mesh
 
     // Use the SAME ground raycast crowd uses for the standing height, so the body
     // ends the get-up exactly where driveKinematic will hold it (no snap on handover).
@@ -773,35 +775,35 @@ function startGetup(mite: Mite, navigation: Navigation, world: World, groundFilt
         groundY = origin[1] - groundCollector.hit.fraction * GROUND_RAY_LEN;
     }
 
-    rigidBody.setMotionType(world, mite.body, MotionType.KINEMATIC, true);
-    vec3.copy(mite.getupFromPos, mite.body.position);
-    quat.copy(mite.getupFromQuat, mite.body.quaternion);
-    vec3.set(mite.getupToPos, snapped[0], groundY + HEIGHT, snapped[2]); // standing pose
-    mite.mode = 'getup';
-    mite.getupTimer = 0;
-    mite.speed = 0;
-    mite.smoothSpeed = 0;
+    rigidBody.setMotionType(world, creature.body, MotionType.KINEMATIC, true);
+    vec3.copy(creature.getupFromPos, creature.body.position);
+    quat.copy(creature.getupFromQuat, creature.body.quaternion);
+    vec3.set(creature.getupToPos, snapped[0], groundY + HEIGHT, snapped[2]); // standing pose
+    creature.mode = 'getup';
+    creature.getupTimer = 0;
+    creature.speed = 0;
+    creature.smoothSpeed = 0;
 }
 
 // Get-up finished: snap upright at the standing pose and re-attach the crowd agent.
-function finishGetup(mite: Mite, navigation: Navigation): void {
+function finishGetup(creature: Creature, navigation: Navigation): void {
     const params = makeAgentParams(AGENT_RADIUS, HEIGHT, AGENT_MAX_SPEED);
-    mite.agentId = addCrowdAgent(navigation, mite.getupToPos, params);
-    mite.mode = 'crowd';
-    mite.quaternion[0] = 0;
-    mite.quaternion[1] = 0;
-    mite.quaternion[2] = 0;
-    mite.quaternion[3] = 1;
-    mite.grounded = false;
+    creature.agentId = addCrowdAgent(navigation, creature.getupToPos, params);
+    creature.mode = 'crowd';
+    creature.quaternion[0] = 0;
+    creature.quaternion[1] = 0;
+    creature.quaternion[2] = 0;
+    creature.quaternion[3] = 1;
+    creature.grounded = false;
 }
 
 // While ragdolling: limbs hold their rest pose with a fast jitter, and the body's
 // full (tumbling) orientation flings them around → flailing.
-function ragdollLimbs(mite: Mite): void {
-    const t = mite.ragdollTimer;
-    const a = RAGDOLL_FLAIL * MITE_SCALE;
+function ragdollLimbs(creature: Creature): void {
+    const t = creature.ragdollTimer;
+    const a = RAGDOLL_FLAIL * CREATURE_SCALE;
     let k = 0;
-    for (const limb of [...mite.legs, ...mite.arms]) {
+    for (const limb of [...creature.legs, ...creature.arms]) {
         _targetLocal[0] = limb.def.restEnd[0] + Math.sin(t * 19 + k) * a;
         _targetLocal[1] = limb.def.restEnd[1] + Math.cos(t * 16 + k * 1.7) * a;
         _targetLocal[2] = limb.def.restEnd[2] + Math.sin(t * 23 + k * 2.3) * a;
@@ -813,100 +815,100 @@ function ragdollLimbs(mite: Mite): void {
 /* ---------------- public update (split around the physics step) ---------------- */
 
 // Set crowd-agent targets. Must run BEFORE updateCrowd so agents steer this
-// frame. Phase-1 placeholder: ping-pong each mite between CLUMP and DROPOFF.
-export function updateMiteNavigation(mites: Mites, navigation: Navigation): void {
-    for (const mite of mites.list) {
-        if (mite.mode !== 'crowd' || !mite.agentId) continue;
-        if (isAgentAtTarget(navigation, mite.agentId, ARRIVE_THRESHOLD)) {
-            mite.targetIndex = mite.targetIndex === 0 ? 1 : 0;
-            setAgentTarget(navigation, mite.agentId, mite.targetIndex === 0 ? CLUMP : DROPOFF);
+// frame. Phase-1 placeholder: ping-pong each creature between CLUMP and DROPOFF.
+export function updateCreatureNavigation(creatures: Creatures, navigation: Navigation): void {
+    for (const creature of creatures.list) {
+        if (creature.mode !== 'crowd' || !creature.agentId) continue;
+        if (isAgentAtTarget(navigation, creature.agentId, ARRIVE_THRESHOLD)) {
+            creature.targetIndex = creature.targetIndex === 0 ? 1 : 0;
+            setAgentTarget(navigation, creature.agentId, creature.targetIndex === 0 ? CLUMP : DROPOFF);
         }
     }
 }
 
-export function updateMitesPreStep(mites: Mites, navigation: Navigation, physics: Physics, dt: number): void {
-    for (const mite of mites.list) {
-        if (mite.mode === 'ragdoll') {
+export function updateCreaturesPreStep(creatures: Creatures, navigation: Navigation, physics: Physics, dt: number): void {
+    for (const creature of creatures.list) {
+        if (creature.mode === 'ragdoll') {
             // tumble freely; begin the get-up once it's flailed a bit AND settled
-            mite.ragdollTimer += dt;
-            const v = mite.body.motionProperties.linearVelocity;
-            if (mite.ragdollTimer > RAGDOLL_MIN_TIME && Math.hypot(v[0], v[1], v[2]) < RAGDOLL_SETTLE_SPEED) {
-                startGetup(mite, navigation, physics.world, mites.groundFilter);
+            creature.ragdollTimer += dt;
+            const v = creature.body.motionProperties.linearVelocity;
+            if (creature.ragdollTimer > RAGDOLL_MIN_TIME && Math.hypot(v[0], v[1], v[2]) < RAGDOLL_SETTLE_SPEED) {
+                startGetup(creature, navigation, physics.world, creatures.groundFilter);
             }
             continue;
         }
-        if (mite.mode === 'getup') {
+        if (creature.mode === 'getup') {
             // ease the body from its tumbled pose back to standing, then re-attach the agent
-            mite.getupTimer += dt;
-            const p = Math.min(mite.getupTimer / GETUP_DURATION, 1);
+            creature.getupTimer += dt;
+            const p = Math.min(creature.getupTimer / GETUP_DURATION, 1);
             const e = p * p * (3 - 2 * p); // smoothstep
-            vec3.lerp(_getupPos, mite.getupFromPos, mite.getupToPos, e);
-            quat.slerp(_getupQuat, mite.getupFromQuat, UPRIGHT, e);
-            rigidBody.moveKinematic(mite.body, _getupPos, _getupQuat, dt);
-            if (p >= 1) finishGetup(mite, navigation);
+            vec3.lerp(_getupPos, creature.getupFromPos, creature.getupToPos, e);
+            quat.slerp(_getupQuat, creature.getupFromQuat, UPRIGHT, e);
+            rigidBody.moveKinematic(creature.body, _getupPos, _getupQuat, dt);
+            if (p >= 1) finishGetup(creature, navigation);
             continue;
         }
-        driveKinematic(mite, physics.world, navigation, dt, mites.groundFilter);
+        driveKinematic(creature, physics.world, navigation, dt, creatures.groundFilter);
         // cadence rises with speed → quicker steps when running; carrying slows it (laboured)
-        let cadence = STEP_CADENCE_BASE + mite.speed * STEP_CADENCE_GAIN;
-        if (mite.load > 0) cadence *= CARRY_CADENCE_MULT;
-        mite.cadence = cadence;
-        mite.stepCycleTime = (mite.stepCycleTime + dt * cadence) % 1;
+        let cadence = STEP_CADENCE_BASE + creature.speed * STEP_CADENCE_GAIN;
+        if (creature.load > 0) cadence *= CARRY_CADENCE_MULT;
+        creature.cadence = cadence;
+        creature.stepCycleTime = (creature.stepCycleTime + dt * cadence) % 1;
     }
 }
 
-export function updateMitesPostStep(mites: Mites, physics: Physics, dt: number): void {
-    for (const mite of mites.list) {
-        vec3.set(mite.position, mite.body.position[0], mite.body.position[1], mite.body.position[2]);
+export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, dt: number): void {
+    for (const creature of creatures.list) {
+        vec3.set(creature.position, creature.body.position[0], creature.body.position[1], creature.body.position[2]);
 
-        if (mite.mode === 'ragdoll') {
-            quat.copy(mite.quaternion, mite.body.quaternion); // full tumbling orientation
-            ragdollLimbs(mite);
-            for (let i = 0; i < mite.eyes.length; i++) {
-                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
-                updateEye(mite.eyes[i], _eyeWorld, dt);
+        if (creature.mode === 'ragdoll') {
+            quat.copy(creature.quaternion, creature.body.quaternion); // full tumbling orientation
+            ragdollLimbs(creature);
+            for (let i = 0; i < creature.eyes.length; i++) {
+                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
+                updateEye(creature.eyes[i], _eyeWorld, dt);
             }
-            writeMite(mites.mesh, mite);
+            writeCreature(creatures.mesh, creature);
             continue;
         }
 
-        if (mite.mode === 'getup') {
+        if (creature.mode === 'getup') {
             // render the righting orientation; plant the feet under the rising body
             // (lerp current→placement) so the legs reach the ground as it stands up.
-            quat.copy(mite.quaternion, mite.body.quaternion);
-            footPlacement(mite, physics.world, mites.groundFilter);
-            for (const leg of mite.legs) {
+            quat.copy(creature.quaternion, creature.body.quaternion);
+            footPlacement(creature, physics.world, creatures.groundFilter);
+            for (const leg of creature.legs) {
                 vec3.lerp(leg.current, leg.current, leg.footPlacement, Math.min(dt * 12, 1));
             }
-            solveLegs(mite);
-            mite.smoothSpeed += (0 - mite.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
-            mite.armPhase = (mite.armPhase + dt * ARM_SWING_FREQ_BASE) % 1;
-            solveArms(mite);
-            for (let i = 0; i < mite.eyes.length; i++) {
-                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
-                updateEye(mite.eyes[i], _eyeWorld, dt);
+            solveLegs(creature);
+            creature.smoothSpeed += (0 - creature.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
+            creature.armPhase = (creature.armPhase + dt * ARM_SWING_FREQ_BASE) % 1;
+            solveArms(creature);
+            for (let i = 0; i < creature.eyes.length; i++) {
+                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
+                updateEye(creature.eyes[i], _eyeWorld, dt);
             }
-            writeMite(mites.mesh, mite);
+            writeCreature(creatures.mesh, creature);
             continue;
         }
 
-        footPlacement(mite, physics.world, mites.groundFilter);
-        stepping(mite, dt);
-        solveLegs(mite);
+        footPlacement(creature, physics.world, creatures.groundFilter);
+        stepping(creature, dt);
+        solveLegs(creature);
 
         // Advance the SMOOTH arm-swing drivers (low-passed speed + accumulated phase)
         // so the swing stays stable even as the crowd velocity / cadence jitters.
-        mite.smoothSpeed += (mite.speed - mite.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
-        const armFreq = ARM_SWING_FREQ_BASE + mite.smoothSpeed * ARM_SWING_FREQ_GAIN;
-        mite.armPhase = (mite.armPhase + dt * armFreq) % 1;
-        solveArms(mite);
+        creature.smoothSpeed += (creature.speed - creature.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
+        const armFreq = ARM_SWING_FREQ_BASE + creature.smoothSpeed * ARM_SWING_FREQ_GAIN;
+        creature.armPhase = (creature.armPhase + dt * armFreq) % 1;
+        solveArms(creature);
 
-        for (let i = 0; i < mite.eyes.length; i++) {
-            bodyToWorld(_eyeWorld, EYE_OFFSETS[i], mite);
-            updateEye(mite.eyes[i], _eyeWorld, dt);
+        for (let i = 0; i < creature.eyes.length; i++) {
+            bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
+            updateEye(creature.eyes[i], _eyeWorld, dt);
         }
 
-        writeMite(mites.mesh, mite);
+        writeCreature(creatures.mesh, creature);
     }
 }
 
@@ -914,8 +916,8 @@ export function updateMitesPostStep(mites: Mites, physics: Physics, dt: number):
 
 // Aim an arm's IK effector at a world point. Pass null to release back to the
 // idle rest pose. The arm reaches it each frame via solveArms().
-export function setArmTarget(mite: Mite, armIndex: number, worldTarget: Vec3 | null): void {
-    const arm = mite.arms[armIndex];
+export function setArmTarget(creature: Creature, armIndex: number, worldTarget: Vec3 | null): void {
+    const arm = creature.arms[armIndex];
     if (worldTarget === null) {
         arm.worldTarget = null;
     } else {
@@ -926,26 +928,26 @@ export function setArmTarget(mite: Mite, armIndex: number, worldTarget: Vec3 | n
 
 // World point where a carried coal of the given radius is held — up near the
 // head (a bit forward), but not hoisted fully overhead. In the body's yaw frame.
-export function getMiteCarryPoint(mite: Mite, radius: number, out: Vec3 = [0, 0, 0]): Vec3 {
-    vec3.set(out, 0, BODY_RADIUS + radius * 0.4, 0.14 * MITE_SCALE);
-    return bodyToWorld(out, out, mite);
+export function getCreatureCarryPoint(creature: Creature, radius: number, out: Vec3 = [0, 0, 0]): Vec3 {
+    vec3.set(out, 0, BODY_RADIUS + radius * 0.4, 0.14 * CREATURE_SCALE);
+    return bodyToWorld(out, out, creature);
 }
 
 // Cup the coal held at `center` from its lower-left / lower-right — slightly
 // inside the surface and below the equator so the hands visibly grip it (offsets
 // rotated into the body's yaw frame so the grip tracks the facing).
-export function gripCoal(mite: Mite, center: Vec3, radius: number): void {
+export function gripCoal(creature: Creature, center: Vec3, radius: number): void {
     vec3.set(_gripL, -radius * 0.8, -radius * 0.3, 0);
-    vec3.transformQuat(_gripL, _gripL, mite.quaternion);
+    vec3.transformQuat(_gripL, _gripL, creature.quaternion);
     _gripL[0] += center[0];
     _gripL[1] += center[1];
     _gripL[2] += center[2];
-    setArmTarget(mite, 0, _gripL);
+    setArmTarget(creature, 0, _gripL);
 
     vec3.set(_gripR, radius * 0.8, -radius * 0.3, 0);
-    vec3.transformQuat(_gripR, _gripR, mite.quaternion);
+    vec3.transformQuat(_gripR, _gripR, creature.quaternion);
     _gripR[0] += center[0];
     _gripR[1] += center[1];
     _gripR[2] += center[2];
-    setArmTarget(mite, 1, _gripR);
+    setArmTarget(creature, 1, _gripR);
 }

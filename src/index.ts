@@ -5,13 +5,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { initBehavior, updateBehavior } from './behavior';
 import { initCoal, spawnCoalClump, updateCoal } from './coal';
 import { type Collider, unpackCollider } from './collider-schema';
+import { initCreatures, spawnCreatures, updateCreaturesPostStep, updateCreaturesPreStep } from './creatures';
 import { attachDebugRaycast, createDebugOverlay, updateDebugOverlay, updatePhysicsDebug } from './debug';
 import { initDust, updateDust } from './dust';
 import { initFurnace, updateFurnace } from './furnace';
 import { initHeat, updateHeat } from './heat';
 import { attachInteraction } from './interaction';
 import { initLighting, updateLighting } from './lighting';
-import { initMites, spawnMites, updateMitesPostStep, updateMitesPreStep } from './mites';
 import { initNavigation, loadNavigation, updateCrowd, updateNavigation } from './navigation';
 import { createSplatCollider, initPhysics, updatePhysics } from './physics';
 import { CAMERA_POSITION, CAMERA_TARGET, CLUMP, COAL_COUNT, COLLIDER_URL, SPLAT_URL } from './scene';
@@ -31,7 +31,7 @@ async function loadCollider(url: string): Promise<Collider> {
 function init() {
     const scene = new THREE.Scene();
 
-    // Fill light for the standard-material meshes (mites). Spark splats are
+    // Fill light for the standard-material meshes (creatures). Spark splats are
     // self-lit and ignore three lights, so this only illuminates the creatures.
     scene.add(new THREE.AmbientLight(0xffffff, 1.2));
     const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x2a1c12, 0.8);
@@ -92,8 +92,8 @@ function init() {
     const dust = initDust();
     scene.add(dust.points);
 
-    const mites = initMites(physics);
-    scene.add(mites.mesh);
+    const creatures = initCreatures(physics);
+    scene.add(creatures.mesh);
 
     const coal = initCoal();
     scene.add(coal.mesh);
@@ -103,8 +103,8 @@ function init() {
 
     const behavior = initBehavior();
 
-    // Click/tap a mite → ragdoll it; click coal → shove it (carrier drops it).
-    attachInteraction(renderer.domElement, { camera, mites, coal, navigation, physics });
+    // Click/tap a creature → ragdoll it; click coal → shove it (carrier drops it).
+    attachInteraction(renderer.domElement, { camera, creatures, coal, navigation, physics });
 
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -126,7 +126,7 @@ function init() {
         lighting,
         heat,
         dust,
-        mites,
+        creatures,
         coal,
         sparks,
         behavior,
@@ -151,19 +151,28 @@ async function load(state: State) {
 
     await loadNavigation(state.navigation);
 
-    // Spawn the crawler mites now the collider + navmesh + crowd exist.
-    spawnMites(state.mites, state.physics, state.navigation);
+    // Spawn the crawler creatures now the collider + navmesh + crowd exist.
+    spawnCreatures(state.creatures, state.physics, state.navigation);
 }
 
 function update(state: State, dt: number, time: number) {
     // Advance the shared furnace signal first so every system reads this frame's value.
     state.furnace.override = state.debug.furnaceOverride;
     updateFurnace(state.furnace, dt);
-    updateBehavior(state.behavior, state.mites, state.coal, state.navigation, state.physics, state.furnace, state.sparks, time);
+    updateBehavior(
+        state.behavior,
+        state.creatures,
+        state.coal,
+        state.navigation,
+        state.physics,
+        state.furnace,
+        state.sparks,
+        time,
+    );
     updateCrowd(state.navigation, dt);
-    updateMitesPreStep(state.mites, state.navigation, state.physics, dt);
+    updateCreaturesPreStep(state.creatures, state.navigation, state.physics, dt);
     updatePhysics(state.physics, dt);
-    updateMitesPostStep(state.mites, state.physics, dt);
+    updateCreaturesPostStep(state.creatures, state.physics, dt);
     updateCoal(state.coal);
     updateSparks(state.sparks, dt);
     updateDust(state.dust, time, state.furnace.intensity);

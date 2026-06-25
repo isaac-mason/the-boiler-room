@@ -38,7 +38,7 @@ const BASE_HUE = 0.06; // warm orange
 const BASE_LIGHTNESS_REST = 0.04;
 const BASE_LIGHTNESS_FED = 0.12;
 
-// Real point light for lighting regular three meshes (e.g. instanced dust mites)
+// Real point light for lighting regular three meshes (e.g. the instanced creatures)
 // — the SDF only affects splats. Co-located with the SDF and flickers in sync.
 const POINT_LIGHT_COLOR = new THREE.Color(1, 0.55, 0.25); // warm fire
 const POINT_LIGHT_REST = 2; // dim resting intensity

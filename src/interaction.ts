@@ -1,14 +1,14 @@
-// Pointer interaction: click/tap a mite to knock it into a ragdoll, or a coal to
+// Pointer interaction: click/tap a creature to knock it into a ragdoll, or a coal to
 // shove it (which makes its carrier drop it). Uses a THREE.Raycaster and a
-// ray→point distance test (the instanced mites/coal are too small/dynamic to
+// ray→point distance test (the instanced creatures/coal are too small/dynamic to
 // raycast per-triangle reliably). Clicks are distinguished from orbit-drags.
 import * as THREE from 'three';
 import { type Coal, type CoalSystem, pushCoal } from './coal';
-import { type Mite, type Mites, ragdollMite } from './mites';
+import { type Creature, type Creatures, ragdollCreature } from './creatures';
 import type { Navigation } from './navigation';
 import type { Physics } from './physics';
 
-const MITE_CLICK_RADIUS = 0.1; // world-space pick tolerance around a mite
+const CREATURE_CLICK_RADIUS = 0.1; // world-space pick tolerance around a creature
 const COAL_CLICK_FACTOR = 2.2; // pick tolerance = coal radius × this
 const COAL_PUSH_SPEED = 1.6; // knock speed along the click ray (m/s)
 const COAL_PUSH_UP = 1.0; // upward component of the knock (m/s)
@@ -22,7 +22,7 @@ const _rel = new THREE.Vector3();
 
 type Deps = {
     camera: THREE.Camera;
-    mites: Mites;
+    creatures: Creatures;
     coal: CoalSystem;
     navigation: Navigation;
     physics: Physics;
@@ -46,7 +46,7 @@ export function attachInteraction(canvas: HTMLElement, deps: Deps): void {
 }
 
 function handleClick(e: PointerEvent, deps: Deps): void {
-    const { camera, mites, coal, navigation, physics } = deps;
+    const { camera, creatures, coal, navigation, physics } = deps;
 
     _ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
     _ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -54,22 +54,22 @@ function handleClick(e: PointerEvent, deps: Deps): void {
     const ray = raycaster.ray;
 
     // Pick whatever the cursor is most directly ON: smallest perpendicular distance
-    // to the ray, normalised by each object's click radius (so a mite the cursor is
+    // to the ray, normalised by each object's click radius (so a creature the cursor is
     // centred on beats a coal that merely happens to be nearer the camera).
     let bestScore = Infinity;
-    let hitMite: Mite | null = null;
+    let hitCreature: Creature | null = null;
     let hitCoal: Coal | null = null;
 
-    const miteR2 = MITE_CLICK_RADIUS * MITE_CLICK_RADIUS;
-    for (const mite of mites.list) {
-        _p.set(mite.position[0], mite.position[1], mite.position[2]);
+    const creatureR2 = CREATURE_CLICK_RADIUS * CREATURE_CLICK_RADIUS;
+    for (const creature of creatures.list) {
+        _p.set(creature.position[0], creature.position[1], creature.position[2]);
         const dSq = ray.distanceSqToPoint(_p);
-        if (dSq > miteR2) continue;
+        if (dSq > creatureR2) continue;
         if (_rel.copy(_p).sub(ray.origin).dot(ray.direction) <= 0) continue; // behind camera
-        const score = dSq / miteR2;
+        const score = dSq / creatureR2;
         if (score < bestScore) {
             bestScore = score;
-            hitMite = mite;
+            hitCreature = creature;
             hitCoal = null;
         }
     }
@@ -83,12 +83,12 @@ function handleClick(e: PointerEvent, deps: Deps): void {
         if (score < bestScore) {
             bestScore = score;
             hitCoal = c;
-            hitMite = null;
+            hitCreature = null;
         }
     }
 
-    if (hitMite) {
-        ragdollMite(hitMite, navigation, physics.world, [ray.direction.x, ray.direction.y, ray.direction.z]);
+    if (hitCreature) {
+        ragdollCreature(hitCreature, navigation, physics.world, [ray.direction.x, ray.direction.y, ray.direction.z]);
     } else if (hitCoal) {
         pushCoal(physics.world, hitCoal, [
             ray.direction.x * COAL_PUSH_SPEED,

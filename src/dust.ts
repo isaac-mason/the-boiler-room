@@ -117,7 +117,7 @@ export function initDust(): Dust {
     points.frustumCulled = false; // motes drift outside the static bounds
     // The splat is transparent and writes no depth, so transparent sort order
     // between it and the dust flips with the camera. Force the dust to draw after
-    // the splat for stable visibility; depthTest still lets the opaque mites/coal
+    // the splat for stable visibility; depthTest still lets the opaque creatures/coal
     // occlude it.
     points.renderOrder = 10;
 

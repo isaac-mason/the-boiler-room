@@ -1,6 +1,6 @@
 // Coal: deterministic convex-hull lumps, simulated as crashcat dynamic bodies
 // and rendered instanced in a single THREE.BatchedMesh (the bodies rotate, so
-// instances carry the full body quaternion). The mites haul these to the boiler.
+// instances carry the full body quaternion). The creatures haul these to the boiler.
 import { type ConvexHullShape, convexHull, MotionType, type RigidBody, rigidBody, scaled, type World } from 'crashcat';
 import { mat4, type Quat, type Vec3 } from 'mathcat';
 import * as THREE from 'three';
@@ -10,7 +10,7 @@ import { OBJECT_LAYER_GHOST, OBJECT_LAYER_MOVING, type Physics } from './physics
 
 const SHAPE_COUNT = 6; // distinct deterministic lumps
 const POINTS_PER_HULL = 14;
-const COAL_RADIUS = 0.05; // ~ a mite body, a bit bigger (less tunnel-prone, so no CCD)
+const COAL_RADIUS = 0.05; // ~ a creature body, a bit bigger (less tunnel-prone, so no CCD)
 const COAL_CONVEX_RADIUS = 0.004; // hull rounding margin (must be << COAL_RADIUS)
 const COAL_DENSITY = 400;
 const COAL_SIZE_MIN = 0.6; // per-coal scale range — some small, some quite big
