@@ -206,6 +206,7 @@ function hideLoading() {
 // frustum culling / LOD plateaus the count below the threshold.
 const SPLAT_READY_FRACTION = 0.8; // lift once this share of the model's splats are rendered
 const SPLAT_WAIT_TIMEOUT_MS = 10000; // ... but never keep the loader up longer than this
+const MAX_DT = 0.1; // clamp dt so a stall/tab-switch can't jump physics + animation forward
 
 async function start() {
     const state = init();
@@ -219,7 +220,7 @@ async function start() {
 
     function loop() {
         const now = performance.now();
-        const dt = (now - lastTime) / 1000;
+        const dt = Math.min((now - lastTime) / 1000, MAX_DT);
         lastTime = now;
         elapsed += dt;
         update(state, dt, elapsed); // renders the frame, which drives Spark's sort + LOD streaming
