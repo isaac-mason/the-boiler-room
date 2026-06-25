@@ -2,6 +2,10 @@
   <img src="docs/hero.jpg" alt="The boiler room: a crowd of little coal-hauling creatures scurrying across the floor toward a glowing furnace" width="820" />
 </p>
 
+<p align="center">
+  <a href="https://isaac-mason.github.io/the-boiler-room/"><b>▶ Live demo</b></a>
+</p>
+
 # the-boiler-room
 
 A Gaussian-splat scene that's *alive*: physics, a navmesh crowd of little coal-hauling creatures, and fire VFX, all running on a [Spark](https://github.com/sparkjsdev/spark) splat in the browser. Fork it as a starter for your own interactive splat worlds.

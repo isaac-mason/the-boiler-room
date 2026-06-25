@@ -6,9 +6,12 @@ import type { Vec3 } from 'mathcat';
 // their own system files, since they're the look you keep regardless of geometry.
 
 // --- Assets (served from public/; see the README's asset pipeline) ---
-export const SPLAT_URL = '/Spirited Away Boiler Room-lod.rad';
-export const COLLIDER_URL = '/collider.bin';
-export const NAVMESH_URL = '/navmesh.json';
+// BASE_URL is '/' in dev and '/<repo>/' for the GitHub Pages build (vite.config.ts),
+// so these resolve whether served from the domain root or a project subpath.
+const BASE = import.meta.env.BASE_URL;
+export const SPLAT_URL = `${BASE}Spirited Away Boiler Room-lod.rad`;
+export const COLLIDER_URL = `${BASE}collider.bin`;
+export const NAVMESH_URL = `${BASE}navmesh.json`;
 
 // --- Camera framing (world-space) ---
 export const CAMERA_POSITION: Vec3 = [-0.37, 0.35, 0.16];
