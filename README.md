@@ -56,7 +56,7 @@ pnpm check        # biome check --write (autofix)
 
 The scene is built up in layers, each one adding to the one below it:
 
-- **A splat world made in Marble.** Spark renders the Gaussian splat, but it's *only* visuals; it has no notion of solid ground or walls. Everything below gives it those.
+- **A splat world made in [Marble](https://marble.worldlabs.ai/).** Spark renders the Gaussian splat, but it's *only* visuals; it has no notion of solid ground or walls. Everything below gives it those.
 - **A physics world** (crashcat, `src/physics.ts`). The baked collider (`public/collider.bin`) is loaded as one static triangle-mesh body, so the room is solid. Coal are dynamic rigid bodies that fall, roll, and collide against it.
 - **A navigation mesh** (navcat, `src/navigation.ts`). The baked navmesh (`public/navmesh.json`) is rebuilt into a `NavMesh` describing every walkable surface: the floor plan the creatures are allowed to move on. (Both this and the collider above are baked offline from the raw `assets/*_collider.glb`; see [Asset pipeline](#asset-pipeline-from-marble-to-the-browser).)
 - **A navcat crowd** for the creatures. It sits on top of the navmesh and steers agents across it with path-following and local avoidance, so they don't clip through walls or pile into each other.
@@ -67,7 +67,7 @@ The loading overlay stays up until splats are genuinely on screen: it watches `S
 
 ## Asset pipeline: from Marble to the browser
 
-This scene started life in [Marble](https://www.worldlabs.ai/) (World Labs' 3D-world generator). The three assets the browser loads are baked offline from Marble's export, so there's no heavy parsing at runtime.
+This scene started life in [Marble](https://marble.worldlabs.ai/) (World Labs' 3D-world generator). The three assets the browser loads are baked offline from Marble's export, so there's no heavy parsing at runtime.
 
 ### 1. Export from Marble
 

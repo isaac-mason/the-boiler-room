@@ -21,20 +21,32 @@ const STRENGTH = 0.012;
 // World-space frequency of the wobble. Higher = finer ripples.
 const SCALE = 3.4;
 
-// Value-noise field, scrolling upward, sampled in world space.
+// The noise tiles every NOISE_PERIOD units, so scrolling it by a whole number of
+// periods loops seamlessly — and keeps the sample coordinates bounded. (The old
+// version scrolled an infinite field by an ever-growing time, which drifted into
+// float32's bad range and made the shimmer pop over time.) Loops every LOOP_SECONDS.
+const NOISE_PERIOD = 8;
+const LOOP_SECONDS = 10;
+
+// Tileable value noise: the lattice corners wrap at HEAT_PERIOD so the field
+// repeats, and the hash avoids large-argument sin() (the precision culprit).
 const NOISE_GLSL = /* glsl */ `
+    const float HEAT_PERIOD = ${NOISE_PERIOD.toFixed(1)};
+
     float heatHash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        p = fract(p * vec2(0.3183099, 0.3678794) + 0.1);
+        p += dot(p, p + 27.13);
+        return fract(p.x * p.y);
     }
-    float heatNoise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
+    float heatNoise(vec2 x) {
+        vec2 i = floor(x);
+        vec2 f = fract(x);
         vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(
-            mix(heatHash(i), heatHash(i + vec2(1.0, 0.0)), u.x),
-            mix(heatHash(i + vec2(0.0, 1.0)), heatHash(i + vec2(1.0, 1.0)), u.x),
-            u.y
-        );
+        float a = heatHash(mod(i,                  HEAT_PERIOD));
+        float b = heatHash(mod(i + vec2(1.0, 0.0), HEAT_PERIOD));
+        float c = heatHash(mod(i + vec2(0.0, 1.0), HEAT_PERIOD));
+        float d = heatHash(mod(i + vec2(1.0, 1.0), HEAT_PERIOD));
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
     }
 `;
 
@@ -87,11 +99,14 @@ export function initHeat(): Heat {
                     float mask = 1.0 - smoothstep(${inputs.radius} * 0.15, ${inputs.radius}, dist);
                     mask *= mask; // bias the heat toward the core
                     if (mask > 0.0) {
-                        float t = ${inputs.time};
+                        // Scroll by a looping phase: each axis advances a whole
+                        // number of tile-periods per loop, so it returns seamlessly.
+                        float phase = fract(${inputs.time} / ${LOOP_SECONDS.toFixed(1)});
+                        float P = ${NOISE_PERIOD.toFixed(1)};
                         vec3 p = ${inputs.gsplat}.center * ${inputs.scale};
-                        float nx = heatNoise(p.yz + vec2(0.0, -t * 1.4));
-                        float ny = heatNoise(p.xz * 1.1 + vec2(-t * 1.1, t * 0.3));
-                        float nz = heatNoise(p.xy * 1.3 + vec2(t * 0.2, -t * 1.9));
+                        float nx = heatNoise(p.yz + vec2(0.0, -phase * 2.0 * P));
+                        float ny = heatNoise(p.xz * 1.1 + vec2(-phase * 1.0 * P, phase * 1.0 * P));
+                        float nz = heatNoise(p.xy * 1.3 + vec2(phase * 1.0 * P, -phase * 2.0 * P));
                         vec3 off = (vec3(nx, ny, nz) - 0.5) * 2.0;
                         off.y = abs(off.y) * 1.5; // heat rises — bias the wobble upward
                         ${g}.center = ${inputs.gsplat}.center

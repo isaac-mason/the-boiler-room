@@ -89,6 +89,16 @@ const CRUSH_PER_LOAD = 0.2 * CREATURE_SCALE; // body sinks this much per unit of
 const CARRY_FOOT_SPLAY = 0.45; // feet splay out this much per unit of load → wide stance keeps legs taut under the crush
 const CARRY_STEP_LEAD = 0.65 * CREATURE_SCALE; // each lunge reaches this far ahead (wide footsteps)
 
+// Movement bob: the body rises and dips with the gait while walking, so the
+// creatures lope instead of gliding. Faded in by smoothed speed → no bob when idle.
+const BOB_AMP = 0.18 * CREATURE_SCALE; // peak vertical bob (metres) at full stride
+const BOB_CYCLES = 2; // body rises this many times per bob cycle (one per tripod push)
+const BOB_FULL_SPEED = 0.22; // smoothed speed (m/s) at which the bob reaches full amplitude
+// Legs scurry fast when unburdened (high cadence), but the body shouldn't heave at
+// that rate — cap the bob cadence so it stays a calm lope. Carrying is already below
+// this, so its (lovely) slow heave is unchanged.
+const BOB_MAX_CADENCE = 1.6; // bob cycles/sec ceiling
+
 // Crowd agent + kinematic ground-follow.
 const AGENT_RADIUS = 0.05;
 export const AGENT_MAX_SPEED = 0.28; // unburdened pace; carrying slows them further
@@ -101,10 +111,16 @@ const TURN_MIN_SPEED = 0.02; // below this speed, keep the current facing (don't
 // Ragdoll (pointer-knocked): the body goes dynamic and tumbles, limbs flailing.
 const RAGDOLL_MIN_TIME = 1.6; // min seconds to tumble before recovery is allowed
 const RAGDOLL_SETTLE_SPEED = 0.15; // recover once the tumbling body slows below this (m/s)
-const RAGDOLL_PUSH = 2.5; // launch speed along the click direction (m/s)
-const RAGDOLL_PUSH_UP = 2.0; // upward kick (m/s)
+const RAGDOLL_PUSH = 1.2; // horizontal scatter speed, in a random direction (m/s)
+const RAGDOLL_PUSH_UP = 3.0; // upward kick (m/s) — dominant, so they pop UP, not toward the back
 const RAGDOLL_SPIN = 18; // tumble angular velocity magnitude (rad/s)
-const RAGDOLL_FLAIL = 0.3; // limb-target jitter while ragdolling (× CREATURE_SCALE)
+// Ragdoll limbs flail as 1-segment verlet pendulums: each tip dangles from its
+// (tumbling) joint, sags under gravity, and lags the body's motion — so the limbs
+// whip and swing instead of staying locked to the rest pose.
+const RAGDOLL_LIMB_DAMP = 0.99; // velocity retained per frame — higher = looser, swingier
+const RAGDOLL_LIMB_GRAVITY = 9.8; // m/s² sag pulling the dangling tips toward the floor
+const RAGDOLL_LIMB_REACH = 0.95; // tip dangles within this fraction of limb length from the joint
+const RAGDOLL_LIMB_ITERATIONS = 3; // FABRIK passes to track the whipping tip
 const GETUP_DURATION = 0.7; // seconds to animate from the tumbled pose back to standing
 
 const EYE_RADIUS = 0.14 * CREATURE_SCALE;
@@ -154,7 +170,9 @@ const LEG_DEFS: LimbDef[] = Array.from({ length: N_LEGS }, (_, i) => {
 
 const ARM_DEFS: LimbDef[] = Array.from({ length: N_ARMS }, (_, i) => {
     const side = i === 0 ? -1 : 1;
-    const attachment: Vec3 = [side * 0.32 * CREATURE_SCALE, -0.1 * CREATURE_SCALE, 0.05 * CREATURE_SCALE];
+    // Shoulders: up on the upper-front of the body, clearly above + ahead of the
+    // hips (LEG_ATTACH_Y, z≈0) so arms and legs read as separate limbs.
+    const attachment: Vec3 = [side * 0.34 * CREATURE_SCALE, 0.12 * CREATURE_SCALE, 0.18 * CREATURE_SCALE];
     // Rest pose reaches out to the SIDE (slightly forward + down) at ~85% arm
     // length, so the arms sit at the body's sides where they're visible (and the
     // near-straight chain has no ambiguous elbow fold for FABRIK to flip).
@@ -181,6 +199,8 @@ type LimbState = {
     stepping: boolean;
     stepProgress: number;
     lastPhase: number; // gait phase last frame (legs only) — to detect the per-cycle step trigger
+    flailPos: Vec3; // world-space limb tip while ragdolling (verlet pendulum)
+    flailPrev: Vec3; // previous flailPos, for verlet velocity
     // Arms only: when set, the arm reaches this WORLD point instead of its rest
     // pose (e.g. to carry a rock above the head). null → idle rest pose.
     worldTarget: Vec3 | null;
@@ -215,6 +235,7 @@ export type Creature = {
     getupFromQuat: Quat;
     getupToPos: Vec3; // standing body pose (navmesh point + ride height)
     stepCycleTime: number;
+    bobPhase: number; // body-bob phase (0..1); advances at a capped cadence so it never gets frantic
     grounded: boolean;
     legs: LimbState[];
     arms: LimbState[];
@@ -255,6 +276,7 @@ const _q: Quat = quat.create();
 const _m4 = mat4.create();
 const _m4three = new THREE.Matrix4(); // transport for BatchedMesh.setMatrixAt
 const _targetLocal: Vec3 = [0, 0, 0];
+const _attachWorld: Vec3 = [0, 0, 0];
 const _eyeWorld: Vec3 = [0, 0, 0];
 const _eyeQuat: Quat = quat.create();
 const _iris: Vec3 = [0, 0, 0];
@@ -318,6 +340,8 @@ function makeLimbState(def: LimbDef): LimbState {
         stepping: false,
         stepProgress: 1,
         lastPhase: 0,
+        flailPos: [0, 0, 0],
+        flailPrev: [0, 0, 0],
         worldTarget: null,
     };
 }
@@ -431,6 +455,7 @@ export function spawnCreatures(creatures: Creatures, physics: Physics, navigatio
             getupFromQuat: [0, 0, 0, 1],
             getupToPos: [0, 0, 0],
             stepCycleTime: Math.random(),
+            bobPhase: Math.random(),
             grounded: false,
             legs,
             arms,
@@ -479,7 +504,10 @@ function driveKinematic(creature: Creature, world: World, navigation: Navigation
 
     // sink toward the floor when burdened — looks crushed under the coal
     const crush = creature.load * CRUSH_PER_LOAD;
-    const target: Vec3 = [ax, groundY + HEIGHT - crush, az];
+    // movement bob: rise/dip with the gait, faded in by speed so idle creatures sit still
+    const bobStrength = Math.min(creature.smoothSpeed / BOB_FULL_SPEED, 1);
+    const bob = Math.sin(creature.bobPhase * Math.PI * 2 * BOB_CYCLES) * BOB_AMP * bobStrength;
+    const target: Vec3 = [ax, groundY + HEIGHT - crush + bob, az];
     rigidBody.moveKinematic(creature.body, target, creature.quaternion, dt);
     creature.grounded = grounded;
 }
@@ -730,7 +758,7 @@ function writeCreature(mesh: THREE.BatchedMesh, creature: Creature): void {
 
 // Knock a creature over: body → dynamic, launched along `dir` with a tumble spin.
 // Re-callable while ragdolling (re-kick). The behaviour drops any carried coal.
-export function ragdollCreature(creature: Creature, navigation: Navigation, world: World, dir: Vec3): void {
+export function ragdollCreature(creature: Creature, navigation: Navigation, world: World): void {
     if (creature.mode !== 'ragdoll') {
         if (creature.agentId) {
             removeCrowdAgent(navigation, creature.agentId);
@@ -741,15 +769,20 @@ export function ragdollCreature(creature: Creature, navigation: Navigation, worl
         creature.load = 0;
         setArmTarget(creature, 0, null);
         setArmTarget(creature, 1, null);
+        // Seed the flail pendulums at the current rest-pose tips (no snap on entry).
+        for (const limb of [...creature.legs, ...creature.arms]) {
+            bodyToWorld(limb.flailPos, limb.def.restEnd, creature);
+            vec3.copy(limb.flailPrev, limb.flailPos);
+        }
     }
-    // Shove horizontally (away from the camera) + a consistent upward pop, so the
-    // knockover never depends on camera angle — a top-down ray would otherwise
-    // cancel the lift and just bury the creature in the floor.
-    const hlen = Math.hypot(dir[0], dir[2]) || 1;
+    // Pop UP with a random horizontal scatter (varied magnitude), so they launch
+    // skyward and land roughly where they were instead of all piling at the back.
+    const angle = Math.random() * Math.PI * 2;
+    const h = RAGDOLL_PUSH * (0.3 + Math.random() * 0.7);
     rigidBody.setLinearVelocity(world, creature.body, [
-        (dir[0] / hlen) * RAGDOLL_PUSH,
-        RAGDOLL_PUSH_UP,
-        (dir[2] / hlen) * RAGDOLL_PUSH,
+        Math.cos(angle) * h,
+        RAGDOLL_PUSH_UP * (0.8 + Math.random() * 0.4),
+        Math.sin(angle) * h,
     ]);
     rigidBody.setAngularVelocity(world, creature.body, [
         (Math.random() * 2 - 1) * RAGDOLL_SPIN,
@@ -799,16 +832,40 @@ function finishGetup(creature: Creature, navigation: Navigation): void {
 
 // While ragdolling: limbs hold their rest pose with a fast jitter, and the body's
 // full (tumbling) orientation flings them around → flailing.
-function ragdollLimbs(creature: Creature): void {
-    const t = creature.ragdollTimer;
-    const a = RAGDOLL_FLAIL * CREATURE_SCALE;
-    let k = 0;
+function ragdollLimbs(creature: Creature, dt: number): void {
+    const g = RAGDOLL_LIMB_GRAVITY * dt * dt;
     for (const limb of [...creature.legs, ...creature.arms]) {
-        _targetLocal[0] = limb.def.restEnd[0] + Math.sin(t * 19 + k) * a;
-        _targetLocal[1] = limb.def.restEnd[1] + Math.cos(t * 16 + k * 1.7) * a;
-        _targetLocal[2] = limb.def.restEnd[2] + Math.sin(t * 23 + k * 2.3) * a;
-        solveLimb(limb, _targetLocal, false, 2);
-        k++;
+        const def = limb.def;
+        // Joint (shoulder/hip) in world space — moves as the body tumbles + flies.
+        bodyToWorld(_attachWorld, def.attachment, creature);
+
+        // Verlet integrate the tip: carry momentum (whip/lag), sag under gravity.
+        const px = limb.flailPos[0];
+        const py = limb.flailPos[1];
+        const pz = limb.flailPos[2];
+        limb.flailPos[0] += (px - limb.flailPrev[0]) * RAGDOLL_LIMB_DAMP;
+        limb.flailPos[1] += (py - limb.flailPrev[1]) * RAGDOLL_LIMB_DAMP - g;
+        limb.flailPos[2] += (pz - limb.flailPrev[2]) * RAGDOLL_LIMB_DAMP;
+        limb.flailPrev[0] = px;
+        limb.flailPrev[1] = py;
+        limb.flailPrev[2] = pz;
+
+        // Constrain the tip to dangle within reach of the joint (pendulum length).
+        const dx = limb.flailPos[0] - _attachWorld[0];
+        const dy = limb.flailPos[1] - _attachWorld[1];
+        const dz = limb.flailPos[2] - _attachWorld[2];
+        const len = Math.hypot(dx, dy, dz) || 1;
+        const reach = def.length * RAGDOLL_LIMB_REACH;
+        if (len > reach) {
+            const s = reach / len;
+            limb.flailPos[0] = _attachWorld[0] + dx * s;
+            limb.flailPos[1] = _attachWorld[1] + dy * s;
+            limb.flailPos[2] = _attachWorld[2] + dz * s;
+        }
+
+        // Bend the chain toward the world tip (FABRIK runs in body-local space).
+        worldToBodyLocal(_targetLocal, limb.flailPos, creature);
+        solveLimb(limb, _targetLocal, false, RAGDOLL_LIMB_ITERATIONS);
     }
 }
 
@@ -854,6 +911,9 @@ export function updateCreaturesPreStep(creatures: Creatures, navigation: Navigat
         if (creature.load > 0) cadence *= CARRY_CADENCE_MULT;
         creature.cadence = cadence;
         creature.stepCycleTime = (creature.stepCycleTime + dt * cadence) % 1;
+        // bob advances at the gait cadence but capped, so fast unburdened steps don't
+        // make the body heave frantically.
+        creature.bobPhase = (creature.bobPhase + dt * Math.min(cadence, BOB_MAX_CADENCE)) % 1;
     }
 }
 
@@ -863,7 +923,7 @@ export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, 
 
         if (creature.mode === 'ragdoll') {
             quat.copy(creature.quaternion, creature.body.quaternion); // full tumbling orientation
-            ragdollLimbs(creature);
+            ragdollLimbs(creature, dt);
             for (let i = 0; i < creature.eyes.length; i++) {
                 bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
                 updateEye(creature.eyes[i], _eyeWorld, dt);
