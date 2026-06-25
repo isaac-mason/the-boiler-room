@@ -246,7 +246,7 @@ export function updateBehavior(
 
         if (reached || fell || landed) {
             if (reached) {
-                stokeFurnace(furnace, 1); // the shared "fire is hot" signal — all VFX read it
+                stokeFurnace(furnace, c.size); // bigger coal → bigger flare (all VFX read this)
                 sparksBurst(sparks, SPARK_ORIGIN, 24); // embers fly out of the fire
             }
             despawnCoal(coal, physics, c);

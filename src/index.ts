@@ -13,20 +13,11 @@ import { initHeat, updateHeat } from './heat';
 import { attachInteraction } from './interaction';
 import { initLighting, updateLighting } from './lighting';
 import { initNavigation, loadNavigation, updateCrowd, updateNavigation } from './navigation';
+import { applyPerformance, initPerformance } from './performance';
 import { createSplatCollider, initPhysics, updatePhysics } from './physics';
 import { CAMERA_POSITION, CAMERA_TARGET, CLUMP, COAL_COUNT, COLLIDER_URL, SPLAT_URL } from './scene';
 import { initSparks, updateSparks } from './sparks';
 import './style.css';
-
-// Read the packed collision mesh back with packcat (built by scripts/build-collider.ts).
-async function loadCollider(url: string): Promise<Collider> {
-    const res = await fetch(url);
-    if (!res.ok) {
-        throw new Error(`Failed to load collider (${res.status}): ${url}`);
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    return unpackCollider(bytes);
-}
 
 function init() {
     const scene = new THREE.Scene();
@@ -70,7 +61,10 @@ function init() {
     controls.target.set(CAMERA_TARGET[0], CAMERA_TARGET[1], CAMERA_TARGET[2]);
     controls.update();
 
-    const debug = createDebugOverlay();
+    // Runtime perf/quality settings (LOD budget, …); the debug panel tweaks these.
+    const perf = initPerformance();
+
+    const debug = createDebugOverlay(perf);
     scene.add(debug.physicsLines);
     scene.add(debug.raycastMarker);
     attachDebugRaycast(debug, camera, scene, renderer.domElement);
@@ -120,6 +114,7 @@ function init() {
         splat,
         controls,
         debug,
+        perf,
         physics,
         navigation,
         furnace,
@@ -135,6 +130,15 @@ function init() {
 }
 
 type State = ReturnType<typeof init>;
+
+async function loadCollider(url: string): Promise<Collider> {
+    const res = await fetch(url);
+    if (!res.ok) {
+        throw new Error(`Failed to load collider (${res.status}): ${url}`);
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return unpackCollider(bytes);
+}
 
 async function load(state: State) {
     // Wait for the splat to finish downloading/decoding before the first frame.
@@ -179,7 +183,9 @@ function update(state: State, dt: number, time: number) {
     state.controls.update();
     updateLighting(state.lighting, state.furnace, time, state.debug.showLights);
     updateHeat(state.heat, state.furnace);
-    updateDebugOverlay(state.debug, state.camera, state.controls, state.furnace);
+    // Push runtime perf settings (LOD budget, …) onto the renderer.
+    applyPerformance(state.perf, state.spark);
+    updateDebugOverlay(state.debug, state.camera, state.controls, state.furnace, state.spark);
     updatePhysicsDebug(state.debug, state.physics.world);
     updateNavigation(state.navigation, state.scene, state.debug.showNavMesh);
     state.renderer.render(state.scene, state.camera);

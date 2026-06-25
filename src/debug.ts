@@ -1,8 +1,10 @@
+import type { SparkRenderer } from '@sparkjsdev/spark';
 import { debug as ccDebug, type World } from 'crashcat';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import type { Furnace } from './furnace';
+import type { Performance } from './performance';
 
 export type DebugOverlay = {
     element: HTMLDivElement;
@@ -58,9 +60,35 @@ function createSlider(label: string, onChange: (value: number | null) => void): 
     return wrapper;
 }
 
+// An always-on labelled range slider that reports its value live, with a readout.
+function createRange(
+    label: string,
+    opts: { min: number; max: number; step: number; value: number },
+    onChange: (value: number) => void,
+): HTMLLabelElement {
+    const wrapper = document.createElement('label');
+    wrapper.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none';
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = String(opts.min);
+    range.max = String(opts.max);
+    range.step = String(opts.step);
+    range.value = String(opts.value);
+    range.style.width = '80px';
+    const readout = document.createElement('span');
+    readout.textContent = opts.value.toFixed(2);
+    range.addEventListener('input', () => {
+        const v = Number(range.value);
+        readout.textContent = v.toFixed(2);
+        onChange(v);
+    });
+    wrapper.append(label, range, readout);
+    return wrapper;
+}
+
 // Minimal debug overlay (plain DOM): a text panel showing the camera position
 // (toggle with the backtick `) plus checkboxes toggling debug wireframes.
-export function createDebugOverlay(): DebugOverlay {
+export function createDebugOverlay(perf: Performance): DebugOverlay {
     const element = document.createElement('div');
     element.style.cssText = [
         'position:fixed',
@@ -122,9 +150,13 @@ export function createDebugOverlay(): DebugOverlay {
         overlay.furnaceOverride = value;
     });
 
+    const lodSlider = createRange('lod scale', { min: 0.2, max: 2, step: 0.05, value: perf.lodScale }, (value) => {
+        perf.lodScale = value;
+    });
+
     overlay.text.style.cssText = 'white-space:pre;user-select:text;-webkit-user-select:text;cursor:text';
 
-    element.append(physicsCheckbox, navmeshCheckbox, lightsCheckbox, furnaceSlider, overlay.text);
+    element.append(physicsCheckbox, navmeshCheckbox, lightsCheckbox, furnaceSlider, lodSlider, overlay.text);
     document.body.appendChild(element);
 
     window.addEventListener('keydown', (event) => {
@@ -171,17 +203,21 @@ export function updateDebugOverlay(
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
     furnace: Furnace,
+    spark: SparkRenderer,
 ): void {
     if (!overlay.enabled) return;
 
     const p = camera.position;
     const t = controls.target;
     const h = overlay.lastHit;
+    const active = spark.activeSplats.toLocaleString();
+    const max = spark.maxSplats.toLocaleString();
     overlay.text.textContent =
         `pos     ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}\n` +
         `target  ${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}\n` +
         `hit     ${h ? `${h.x.toFixed(2)}, ${h.y.toFixed(2)}, ${h.z.toFixed(2)}` : '-'}\n` +
-        `furnace int ${furnace.intensity.toFixed(2)}  pulse ${furnace.pulse.toFixed(2)}`;
+        `furnace int ${furnace.intensity.toFixed(2)}  pulse ${furnace.pulse.toFixed(2)}\n` +
+        `splats  ${active} / ${max}  (lod x${spark.lodSplatScale.toFixed(2)})`;
 }
 
 // Rebuild the physics wireframe from the crashcat debug helpers (flat line segments).

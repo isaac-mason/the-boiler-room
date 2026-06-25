@@ -114,6 +114,12 @@ const RAGDOLL_SETTLE_SPEED = 0.15; // recover once the tumbling body slows below
 const RAGDOLL_PUSH = 1.2; // horizontal scatter speed, in a random direction (m/s)
 const RAGDOLL_PUSH_UP = 3.0; // upward kick (m/s) — dominant, so they pop UP, not toward the back
 const RAGDOLL_SPIN = 18; // tumble angular velocity magnitude (rad/s)
+// Batting an already-downed creature with the cursor: ADD an impulse (don't reset
+// its velocity, or it freezes), capped so repeated swipes can't fling it absurdly.
+const RAGDOLL_KICK = 0.25; // horizontal impulse per swipe-event (× strength)
+const RAGDOLL_KICK_UP = 0.3; // upward pop when batted (× strength)
+const RAGDOLL_KICK_MAX = 0.9; // resulting speed cap (m/s) — a gentle jostle, not a fling
+const RAGDOLL_KICK_SPIN = 0.15; // fraction of RAGDOLL_SPIN applied when batted
 // Ragdoll limbs flail as 1-segment verlet pendulums: each tip dangles from its
 // (tumbling) joint, sags under gravity, and lags the body's motion — so the limbs
 // whip and swing instead of staying locked to the rest pose.
@@ -122,6 +128,7 @@ const RAGDOLL_LIMB_GRAVITY = 9.8; // m/s² sag pulling the dangling tips toward 
 const RAGDOLL_LIMB_REACH = 0.95; // tip dangles within this fraction of limb length from the joint
 const RAGDOLL_LIMB_ITERATIONS = 3; // FABRIK passes to track the whipping tip
 const GETUP_DURATION = 0.7; // seconds to animate from the tumbled pose back to standing
+const GETUP_ARM_RATE = 7; // per-sec lerp of the arms from their ragdoll pose toward rest (no snap)
 
 const EYE_RADIUS = 0.14 * CREATURE_SCALE;
 const IRIS_RADIUS = 0.05 * CREATURE_SCALE;
@@ -201,6 +208,7 @@ type LimbState = {
     lastPhase: number; // gait phase last frame (legs only) — to detect the per-cycle step trigger
     flailPos: Vec3; // world-space limb tip while ragdolling (verlet pendulum)
     flailPrev: Vec3; // previous flailPos, for verlet velocity
+    getupLocal: Vec3; // arms: eased local IK target during get-up (ragdoll pose → rest, no snap)
     // Arms only: when set, the arm reaches this WORLD point instead of its rest
     // pose (e.g. to carry a rock above the head). null → idle rest pose.
     worldTarget: Vec3 | null;
@@ -276,6 +284,7 @@ const _q: Quat = quat.create();
 const _m4 = mat4.create();
 const _m4three = new THREE.Matrix4(); // transport for BatchedMesh.setMatrixAt
 const _targetLocal: Vec3 = [0, 0, 0];
+const _armRest: Vec3 = [0, 0, 0];
 const _attachWorld: Vec3 = [0, 0, 0];
 const _eyeWorld: Vec3 = [0, 0, 0];
 const _eyeQuat: Quat = quat.create();
@@ -342,6 +351,7 @@ function makeLimbState(def: LimbDef): LimbState {
         lastPhase: 0,
         flailPos: [0, 0, 0],
         flailPrev: [0, 0, 0],
+        getupLocal: [0, 0, 0],
         worldTarget: null,
     };
 }
@@ -627,6 +637,28 @@ function solveLegs(creature: Creature): void {
     }
 }
 
+// The idle arm-swing rest target (body-local), for arm `i`. Aims the hand a
+// near-full-arm-length from the shoulder, out + down, swinging fore/aft. Keeping it
+// near full extension means the long noodly arm stays taut and just POINTS — no
+// chaotic folding.
+function armRestTarget(creature: Creature, i: number, out: Vec3): void {
+    const arm = creature.arms[i];
+    const side = i === 0 ? -1 : 1;
+    const swing = Math.sin((creature.armPhase + i * 0.5) * Math.PI * 2); // −1..1, arms opposite
+    const speedFrac = Math.min(creature.smoothSpeed / AGENT_MAX_SPEED, 1);
+    const swingAmt = ARM_SWING_AMP_BASE + ARM_SWING_AMP_GAIN * speedFrac;
+    const fore = swing * swingAmt; // fore/aft, bigger when moving
+    // 'U' arc: the hand lifts at the fore/aft extremes (swing²) and dips through the
+    // centre — a pendulum sweep instead of a flat fore/aft line.
+    const lift = ARM_U_LIFT * swing * swing * swingAmt;
+    vec3.set(_dir, side * ARM_OUT, -ARM_DOWN + lift, fore);
+    vec3.normalize(_dir, _dir);
+    const reach = ARM_LENGTH * ARM_EXTEND;
+    out[0] = arm.def.attachment[0] + _dir[0] * reach;
+    out[1] = arm.def.attachment[1] + _dir[1] * reach;
+    out[2] = arm.def.attachment[2] + _dir[2] * reach;
+}
+
 function solveArms(creature: Creature): void {
     for (let i = 0; i < creature.arms.length; i++) {
         const arm = creature.arms[i];
@@ -634,24 +666,7 @@ function solveArms(creature: Creature): void {
             // Reach a world point — into the body's (yawed) local frame for the IK.
             worldToBodyLocal(_targetLocal, arm.worldTarget, creature);
         } else {
-            // not carrying: aim the hand a near-full-arm-length away from the shoulder,
-            // out + down, swinging fore/aft. Keeping it near full extension means the
-            // long noodly arm stays taut and just POINTS — no chaotic folding.
-            const side = i === 0 ? -1 : 1;
-            const swing = Math.sin((creature.armPhase + i * 0.5) * Math.PI * 2); // −1..1, arms opposite
-            const speedFrac = Math.min(creature.smoothSpeed / AGENT_MAX_SPEED, 1);
-            const swingAmt = ARM_SWING_AMP_BASE + ARM_SWING_AMP_GAIN * speedFrac;
-            const fore = swing * swingAmt; // fore/aft, bigger when moving
-            // 'U' arc: the hand lifts at the fore/aft extremes (swing²) and dips through
-            // the centre — a pendulum sweep instead of a flat fore/aft line.
-            const lift = ARM_U_LIFT * swing * swing * swingAmt;
-            // direction from the shoulder, then normalise → a clean reach direction
-            vec3.set(_dir, side * ARM_OUT, -ARM_DOWN + lift, fore);
-            vec3.normalize(_dir, _dir);
-            const reach = ARM_LENGTH * ARM_EXTEND;
-            _targetLocal[0] = arm.def.attachment[0] + _dir[0] * reach;
-            _targetLocal[1] = arm.def.attachment[1] + _dir[1] * reach;
-            _targetLocal[2] = arm.def.attachment[2] + _dir[2] * reach;
+            armRestTarget(creature, i, _targetLocal);
         }
         solveLimb(arm, _targetLocal, false, ARM_IK_ITERATIONS); // warm-start from current pose → smooth, no fold-flip
     }
@@ -758,7 +773,7 @@ function writeCreature(mesh: THREE.BatchedMesh, creature: Creature): void {
 
 // Knock a creature over: body → dynamic, launched along `dir` with a tumble spin.
 // Re-callable while ragdolling (re-kick). The behaviour drops any carried coal.
-export function ragdollCreature(creature: Creature, navigation: Navigation, world: World): void {
+export function ragdollCreature(creature: Creature, navigation: Navigation, world: World, strength = 1): void {
     if (creature.mode !== 'ragdoll') {
         if (creature.agentId) {
             removeCrowdAgent(navigation, creature.agentId);
@@ -777,19 +792,46 @@ export function ragdollCreature(creature: Creature, navigation: Navigation, worl
     }
     // Pop UP with a random horizontal scatter (varied magnitude), so they launch
     // skyward and land roughly where they were instead of all piling at the back.
+    // `strength` scales the whole launch (driven by pointer speed in interaction.ts).
     const angle = Math.random() * Math.PI * 2;
-    const h = RAGDOLL_PUSH * (0.3 + Math.random() * 0.7);
+    const h = RAGDOLL_PUSH * (0.3 + Math.random() * 0.7) * strength;
     rigidBody.setLinearVelocity(world, creature.body, [
         Math.cos(angle) * h,
-        RAGDOLL_PUSH_UP * (0.8 + Math.random() * 0.4),
+        RAGDOLL_PUSH_UP * (0.8 + Math.random() * 0.4) * strength,
         Math.sin(angle) * h,
     ]);
+    const spin = RAGDOLL_SPIN * strength;
     rigidBody.setAngularVelocity(world, creature.body, [
-        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
-        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
-        (Math.random() * 2 - 1) * RAGDOLL_SPIN,
+        (Math.random() * 2 - 1) * spin,
+        (Math.random() * 2 - 1) * spin,
+        (Math.random() * 2 - 1) * spin,
     ]);
     creature.ragdollTimer = 0;
+}
+
+// Bat an already-ragdolling creature: ADD a velocity-scaled impulse (so it can be
+// knocked around while down) rather than resetting its velocity. Capped so a fast
+// sweep doesn't accumulate it into orbit.
+export function kickRagdoll(creature: Creature, world: World, strength: number): void {
+    const v = creature.body.motionProperties.linearVelocity;
+    const angle = Math.random() * Math.PI * 2;
+    const k = RAGDOLL_KICK * strength;
+    let nx = v[0] + Math.cos(angle) * k;
+    let nz = v[2] + Math.sin(angle) * k;
+    const ny = Math.min(v[1] + RAGDOLL_KICK_UP * strength, RAGDOLL_KICK_MAX);
+    const h = Math.hypot(nx, nz);
+    if (h > RAGDOLL_KICK_MAX) {
+        nx = (nx / h) * RAGDOLL_KICK_MAX;
+        nz = (nz / h) * RAGDOLL_KICK_MAX;
+    }
+    rigidBody.setLinearVelocity(world, creature.body, [nx, ny, nz]);
+    const spin = RAGDOLL_SPIN * RAGDOLL_KICK_SPIN * strength;
+    rigidBody.setAngularVelocity(world, creature.body, [
+        (Math.random() * 2 - 1) * spin,
+        (Math.random() * 2 - 1) * spin,
+        (Math.random() * 2 - 1) * spin,
+    ]);
+    creature.ragdollTimer = 0; // reset recovery so batting keeps it down
 }
 
 // Settled — begin the animated get-up: body → kinematic, captured tumbled pose
@@ -816,6 +858,12 @@ function startGetup(creature: Creature, navigation: Navigation, world: World, gr
     creature.getupTimer = 0;
     creature.speed = 0;
     creature.smoothSpeed = 0;
+
+    // Seed the arm get-up targets at their current (flailed) tips, so the get-up
+    // eases them to the rest pose instead of snapping there.
+    for (const arm of creature.arms) {
+        vec3.copy(arm.getupLocal, arm.chain.bones[arm.chain.bones.length - 1].end);
+    }
 }
 
 // Get-up finished: snap upright at the standing pose and re-attach the crowd agent.
@@ -943,7 +991,13 @@ export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, 
             solveLegs(creature);
             creature.smoothSpeed += (0 - creature.smoothSpeed) * Math.min(dt * ARM_SWING_SMOOTH, 1);
             creature.armPhase = (creature.armPhase + dt * ARM_SWING_FREQ_BASE) % 1;
-            solveArms(creature);
+            // Ease each arm from its flailed get-up pose toward the rest swing (no snap).
+            for (let i = 0; i < creature.arms.length; i++) {
+                const arm = creature.arms[i];
+                armRestTarget(creature, i, _armRest);
+                vec3.lerp(arm.getupLocal, arm.getupLocal, _armRest, Math.min(dt * GETUP_ARM_RATE, 1));
+                solveLimb(arm, arm.getupLocal, false, ARM_IK_ITERATIONS);
+            }
             for (let i = 0; i < creature.eyes.length; i++) {
                 bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
                 updateEye(creature.eyes[i], _eyeWorld, dt);

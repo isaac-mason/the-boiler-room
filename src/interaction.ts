@@ -5,7 +5,7 @@
 // are too small/dynamic to raycast per-triangle reliably).
 import * as THREE from 'three';
 import { type CoalSystem, pushCoal } from './coal';
-import { type Creatures, ragdollCreature } from './creatures';
+import { type Creatures, kickRagdoll, ragdollCreature } from './creatures';
 import type { Navigation } from './navigation';
 import type { Physics } from './physics';
 
@@ -13,6 +13,13 @@ const CREATURE_SWEEP_RADIUS = 0.14; // world-space reach of the cursor wand arou
 const COAL_SWEEP_FACTOR = 2.4; // coal reach = coal radius × this
 const COAL_PUSH_SPEED = 1.6; // shove speed along the cursor ray (m/s)
 const COAL_PUSH_UP = 1.0; // upward component of the shove (m/s)
+
+// The knock scales with how fast the pointer is moving: a brisk swipe sends them
+// flying, a slow drift just nudges. `strength` is interpolated MIN..MAX as the
+// pointer speed (px/ms) rises toward REF_SPEED.
+const SWEEP_REF_SPEED = 2.5; // px/ms that maps to full-strength
+const SWEEP_MIN_STRENGTH = 0.15; // a slow pass barely twitches them
+const SWEEP_MAX_STRENGTH = 1.0; // a fast swipe gives the full (original) knock
 
 const raycaster = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
@@ -28,15 +35,32 @@ type Deps = {
 };
 
 export function attachInteraction(canvas: HTMLElement, deps: Deps): void {
+    let lastX = 0;
+    let lastY = 0;
+    let lastT: number | undefined;
+
     canvas.addEventListener('pointermove', (e) => {
         // Mouse: react on hover only (no button held), so the wand never fights an
         // orbit-drag. Touch/pen have no hover, so react to the drag itself.
         if (e.pointerType === 'mouse' && e.buttons !== 0) return;
-        sweep(e, deps);
+
+        // Pointer speed (px/ms) since the last move → a knock-strength multiplier.
+        let speed = 0;
+        if (lastT !== undefined) {
+            const dt = e.timeStamp - lastT;
+            if (dt > 0) speed = Math.hypot(e.clientX - lastX, e.clientY - lastY) / dt;
+        }
+        lastX = e.clientX;
+        lastY = e.clientY;
+        lastT = e.timeStamp;
+
+        const t = Math.min(speed / SWEEP_REF_SPEED, 1);
+        const strength = SWEEP_MIN_STRENGTH + (SWEEP_MAX_STRENGTH - SWEEP_MIN_STRENGTH) * t;
+        sweep(e, deps, strength);
     });
 }
 
-function sweep(e: PointerEvent, deps: Deps): void {
+function sweep(e: PointerEvent, deps: Deps, strength: number): void {
     const { camera, creatures, coal, navigation, physics } = deps;
 
     _ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
@@ -44,15 +68,18 @@ function sweep(e: PointerEvent, deps: Deps): void {
     raycaster.setFromCamera(_ndc, camera);
     const ray = raycaster.ray;
 
-    // Knock every creature the cursor passes near. Skip ones already tumbling —
-    // re-calling ragdoll would re-zero their velocity each event and freeze them.
+    // Knock every creature the cursor passes near. Ones already tumbling get an
+    // additive kick (so they can be batted around) rather than a velocity reset.
     const creatureR2 = CREATURE_SWEEP_RADIUS * CREATURE_SWEEP_RADIUS;
     for (const creature of creatures.list) {
-        if (creature.mode === 'ragdoll') continue;
         _p.set(creature.position[0], creature.position[1], creature.position[2]);
         if (ray.distanceSqToPoint(_p) > creatureR2) continue;
         if (_rel.copy(_p).sub(ray.origin).dot(ray.direction) <= 0) continue; // behind camera
-        ragdollCreature(creature, navigation, physics.world);
+        if (creature.mode === 'ragdoll') {
+            kickRagdoll(creature, physics.world, strength);
+        } else {
+            ragdollCreature(creature, navigation, physics.world, strength);
+        }
     }
 
     // Shove any coal the cursor passes near (drops it from its carrier).
@@ -62,9 +89,9 @@ function sweep(e: PointerEvent, deps: Deps): void {
         if (ray.distanceSqToPoint(_p) > coalR2) continue;
         if (_rel.copy(_p).sub(ray.origin).dot(ray.direction) <= 0) continue;
         pushCoal(physics.world, c, [
-            ray.direction.x * COAL_PUSH_SPEED,
-            ray.direction.y * COAL_PUSH_SPEED + COAL_PUSH_UP,
-            ray.direction.z * COAL_PUSH_SPEED,
+            ray.direction.x * COAL_PUSH_SPEED * strength,
+            ray.direction.y * COAL_PUSH_SPEED * strength + COAL_PUSH_UP,
+            ray.direction.z * COAL_PUSH_SPEED * strength,
         ]);
     }
 }
