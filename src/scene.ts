@@ -23,3 +23,8 @@ export const SPARK_ORIGIN: Vec3 = [-1.55, 0.2, -2.45]; // where embers fly out o
 
 // --- Physics ---
 export const FLOOR_Y = -0.1; // floor / kill-plane height for coal that falls through
+export const FLOOR_HALF_EXTENTS: Vec3 = [5, 0.1, 5]; // catch-plane footprint under the scene
+
+// --- Population & scale ---
+export const COAL_COUNT = 24; // lumps in the starting pile
+export const MITE_COUNT = 20; // creatures hauling coal

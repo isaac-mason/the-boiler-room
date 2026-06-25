@@ -34,11 +34,10 @@ import {
     snapToNavMesh,
 } from './navigation';
 import { OBJECT_LAYER_MOVING, type Physics } from './physics';
-import { CLUMP, DROPOFF } from './scene';
+import { CLUMP, DROPOFF, MITE_COUNT } from './scene';
 
 /* ---------------- config (all spatial dims scaled by MITE_SCALE) ---------------- */
 
-const MITE_COUNT = 20;
 const MITE_SCALE = 0.06;
 
 const BODY_RADIUS = 0.5 * MITE_SCALE;

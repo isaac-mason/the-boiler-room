@@ -14,7 +14,7 @@ import { initLighting, updateLighting } from './lighting';
 import { initMites, spawnMites, updateMitesPostStep, updateMitesPreStep } from './mites';
 import { initNavigation, loadNavigation, updateCrowd, updateNavigation } from './navigation';
 import { createSplatCollider, initPhysics, updatePhysics } from './physics';
-import { CAMERA_POSITION, CAMERA_TARGET, CLUMP, COLLIDER_URL, SPLAT_URL } from './scene';
+import { CAMERA_POSITION, CAMERA_TARGET, CLUMP, COAL_COUNT, COLLIDER_URL, SPLAT_URL } from './scene';
 import { initSparks, updateSparks } from './sparks';
 import './style.css';
 
@@ -147,7 +147,7 @@ async function load(state: State) {
     createSplatCollider(state.physics, state.collider);
 
     // Drop the initial coal pile on the clump (needs the collider to land on).
-    spawnCoalClump(state.coal, state.physics, CLUMP, 24);
+    spawnCoalClump(state.coal, state.physics, CLUMP, COAL_COUNT);
 
     await loadNavigation(state.navigation);
 

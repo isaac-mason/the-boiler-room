@@ -14,7 +14,7 @@ import {
     type World,
 } from 'crashcat';
 import type { Collider } from './collider-schema';
-import { FLOOR_Y } from './scene';
+import { FLOOR_HALF_EXTENTS, FLOOR_Y } from './scene';
 
 // Register all shapes & constraints up front. Simplest during development; swap
 // for granular registerShapes/registerConstraints later for better tree-shaking.
@@ -43,7 +43,7 @@ export function initPhysics(): Physics {
     const world = createWorld(settings);
 
     rigidBody.create(world, {
-        shape: box.create({ halfExtents: [5, 0.1, 5] }),
+        shape: box.create({ halfExtents: FLOOR_HALF_EXTENTS }),
         position: [0, FLOOR_Y, 0],
         motionType: MotionType.STATIC,
         objectLayer: OBJECT_LAYER_NOT_MOVING,
