@@ -4,23 +4,22 @@ import * as THREE from 'three';
 import type { Furnace } from './furnace';
 import { FIRE_ORIGIN } from './scene';
 
-// Where the flickering tint originates from, in world space (as a THREE.Vector3
-// for the SDF lights; the source of truth is FIRE_ORIGIN in scene.ts).
+// Where the boiler heat/light originates, in world space.
 export const LIGHT_ORIGIN = new THREE.Vector3(FIRE_ORIGIN[0], FIRE_ORIGIN[1], FIRE_ORIGIN[2]);
 
-const RADIUS = 4;
-
-// A tight, intense "hot core" right at the boiler, on its own additive layer. It
-// stacks on top of the broad glow so the splats right at the boiler read as
-// white-hot, falling off fast into the surrounding warm glow.
+// A tight, intense "hot core" right at the boiler — a localized additive splat glow
+// that sells the heat. (A broad room-wide glow recolored every splat and washed out
+// detail, so room-level ambiance is handled elsewhere now; this stays small.)
 const CORE_RADIUS = 0.85;
 const CORE_HUE = 0.075; // hotter, toward yellow-white
 const CORE_SAT = 0.55; // less saturated → whiter-hot, not deep orange
 const CORE_LIGHTNESS_REST = 0.12;
 const CORE_LIGHTNESS_FED = 0.3; // lower peak → hot-orange, not blown-out white
+const CORE_FLICKER_AMP = 0.12; // lightness wobble of the hot core
+const CORE_PULSE = 0.2; // extra core brightness on a coal-blast pulse
 
-// Stacked sine waves at different speeds → a fire-like flicker signal centred on
-// 0, roughly -1..1. Shared so other systems (e.g. dust) can flicker in sync.
+// Stacked sine waves at different speeds → a chaotic, fire-like flicker. Drives the
+// hot core; exported so other systems can flicker in sync if needed.
 export function flicker(time: number): number {
     const slow = Math.sin(time * 4);
     const medium = Math.sin(time * 9) * 0.6;
@@ -28,72 +27,53 @@ export function flicker(time: number): number {
     return (slow + medium + fast) / 1.9;
 }
 
-// A second, much calmer flicker signal for the room-wide glow: slow + low variance,
-// so the whole room gently breathes instead of strobing. The chaotic `flicker`
-// above is reserved for the tight hot core, which keeps the boiler lively.
+// A calmer flicker for the creature point light — gentle breath, low variance.
 function flickerCalm(time: number): number {
     return (Math.sin(time * 2.0) + Math.sin(time * 3.6) * 0.25) / 1.25;
 }
 
-// Broad room glow — gently dynamic, smooth (not erratic) so it's never oppressive.
-const GLOBAL_FLICKER_AMP = 0.05; // lightness wobble of the broad glow
-const GLOBAL_HUE_AMP = 0.006; // hue wobble of the broad glow
-
-// Hot core — chaotic + punchy, to offset the now-calm room.
-const CORE_FLICKER_AMP = 0.12; // lightness wobble of the hot core (was ~0.05)
-const CORE_PULSE = 0.2; // extra core brightness on a coal-blast pulse (lower → less white flash)
-
-const BASE_HUE = 0.06; // warm orange
-
-// Resting (unfed) → fed (a coal in the fire). The fire sits dim normally and
-// swells to the "fed" level driven by the shared furnace intensity (furnace.ts).
-// Darker base → the room recedes into shadow and the boiler reads as the one
-// central heat source, instead of the whole room glowing brightly.
-const BASE_LIGHTNESS_REST = 0.025;
-const BASE_LIGHTNESS_FED = 0.08;
-
-// Real point light for lighting regular three meshes (e.g. the instanced creatures)
-// — the SDF only affects splats. Co-located with the SDF and flickers in sync.
+// Real point light for the standard-material meshes (creatures/coal); the SDF only
+// affects splats. Co-located with the boiler, swells with the fire + pops on a blast.
 const POINT_LIGHT_COLOR = new THREE.Color(1, 0.55, 0.25); // warm fire
 const POINT_LIGHT_REST = 2; // dim resting intensity
-const POINT_LIGHT_FED = 8; // intensity with the fire fed (was the resting value)
+const POINT_LIGHT_FED = 8; // intensity with the fire fed
 const POINT_LIGHT_FLICKER = 0.3; // fraction of base the (calm) flicker swings on the creatures
+const POINT_LIGHT_PULSE = 5; // extra point-light intensity on a coal-blast pulse → flares the creatures
+
+// Room-wide ambient in the spirit of the Spark dynamic-lighting example: a
+// *multiplicative* edit (not additive!) that scales every splat toward a dark warm,
+// giving the room mood/shadow WITHOUT washing out detail the way a broad additive
+// light did. (The example uses DARKEN, which our pinned Spark lacks; MULTIPLY gives
+// the same "darken, don't wash" result.) The tight ADD core relights the boiler.
+const AMBIENT_RADIUS = 5; // covers the whole room (sharp edge → near-uniform inside)
+const AMBIENT_HUE = 0.05;
+const AMBIENT_SAT = 0.35; // gentle warm tint (multiply over-saturates if high)
+const AMBIENT_OPACITY = 0.8; // how strongly it applies (0 = none, 1 = full)
+const AMBIENT_MUL_REST = 0.66; // room multiplied toward this brightness when resting (moody, but not too dark)
+const AMBIENT_MUL_FED = 1.0; // fully lifts as the fire is fed → the room brightening reads clearly
+const AMBIENT_FLICKER_AMP = 0.09; // brightness breath on the room (connected to the fire's flicker)
+const AMBIENT_SAT_AMP = 0.12; // warmth breath — the room tints warmer on flicker peaks
+const AMBIENT_HUE_AMP = 0.008; // small hue wobble in sync
 
 export type Lighting = {
-    /** SplatEdit layer (ADD_RGBA) that tints nearby splats. Add to your scene. */
-    layer: SplatEdit;
-    /** Spherical SDF light whose colour flickers each frame. */
-    light: SplatEditSdf;
-    /** Second ADD_RGBA layer for the tight hot core. Add to your scene. */
+    /** ADD_RGBA layer for the tight hot core. Add to your scene. */
     coreLayer: SplatEdit;
     /** Tight, intense SDF right at the boiler — sells the heat. */
     core: SplatEditSdf;
-    /** Wireframe sphere visualising the SDF. Add to your scene; toggle via debug panel. */
-    helper: THREE.Mesh;
-    /** Wireframe sphere visualising the hot core SDF. Add to your scene; toggled with the helper. */
+    /** Wireframe sphere visualising the core SDF. Add to your scene; toggled via debug. */
     coreHelper: THREE.Mesh;
-    /** Real point light at the same spot, for lighting non-splat meshes. Add to your scene. */
+    /** DARKEN layer giving the room its moody ambient. Add to your scene. */
+    ambientLayer: SplatEdit;
+    /** Room-wide SDF that darkens splats toward a dark warm. */
+    ambient: SplatEditSdf;
+    /** Wireframe sphere visualising the ambient SDF. Add to your scene; toggled via debug. */
+    ambientHelper: THREE.Mesh;
+    /** Real point light at the boiler, for lighting non-splat meshes. Add to your scene. */
     pointLight: THREE.PointLight;
 };
 
 export function initLighting(): Lighting {
-    // ADD_RGBA additively tints splats inside the SDF, like the dynamic-lighting example.
-    const layer = new SplatEdit({
-        rgbaBlendMode: SplatEditRgbaBlendMode.ADD_RGBA,
-        sdfSmooth: 0.1,
-        softEdge: 1.4,
-    });
-
-    const light = new SplatEditSdf({
-        type: SplatEditSdfType.SPHERE,
-        color: new THREE.Color(1, 0.6, 0.3),
-        radius: RADIUS,
-        opacity: 1,
-    });
-    light.position.copy(LIGHT_ORIGIN);
-    layer.add(light);
-
-    // Tight hot core on its own additive layer (tighter soft edge → a defined hot spot).
+    // Tight hot core on its own additive layer (tight soft edge → a defined hot spot).
     const coreLayer = new SplatEdit({
         rgbaBlendMode: SplatEditRgbaBlendMode.ADD_RGBA,
         sdfSmooth: 0.1,
@@ -108,16 +88,6 @@ export function initLighting(): Lighting {
     core.position.copy(LIGHT_ORIGIN);
     coreLayer.add(core);
 
-    const helper = new THREE.Mesh(
-        new THREE.SphereGeometry(RADIUS, 16, 16),
-        new THREE.MeshBasicMaterial({ wireframe: true, color: light.color, depthTest: false }),
-    );
-    helper.position.copy(LIGHT_ORIGIN);
-    helper.visible = false;
-    helper.renderOrder = 1000;
-    helper.frustumCulled = false;
-    helper.raycast = () => {};
-
     const coreHelper = new THREE.Mesh(
         new THREE.SphereGeometry(CORE_RADIUS, 16, 16),
         new THREE.MeshBasicMaterial({ wireframe: true, color: core.color, depthTest: false }),
@@ -128,33 +98,50 @@ export function initLighting(): Lighting {
     coreHelper.frustumCulled = false;
     coreHelper.raycast = () => {};
 
+    // Room-wide multiplicative ambient (sharp edge → near-uniform inside the sphere).
+    const ambientLayer = new SplatEdit({
+        rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY,
+        sdfSmooth: 0.1,
+        softEdge: 0.05,
+    });
+    const ambient = new SplatEditSdf({
+        type: SplatEditSdfType.SPHERE,
+        color: new THREE.Color(1, 0.8, 0.6),
+        radius: AMBIENT_RADIUS,
+        opacity: AMBIENT_OPACITY,
+    });
+    ambient.position.copy(LIGHT_ORIGIN);
+    ambientLayer.add(ambient);
+
+    const ambientHelper = new THREE.Mesh(
+        new THREE.SphereGeometry(AMBIENT_RADIUS, 16, 16),
+        new THREE.MeshBasicMaterial({ wireframe: true, color: ambient.color, depthTest: false }),
+    );
+    ambientHelper.position.copy(LIGHT_ORIGIN);
+    ambientHelper.visible = false;
+    ambientHelper.renderOrder = 1000;
+    ambientHelper.frustumCulled = false;
+    ambientHelper.raycast = () => {};
+
     const pointLight = new THREE.PointLight(POINT_LIGHT_COLOR, POINT_LIGHT_REST);
     pointLight.position.copy(LIGHT_ORIGIN);
 
-    return { layer, light, coreLayer, core, helper, coreHelper, pointLight };
+    return { coreLayer, core, coreHelper, ambientLayer, ambient, ambientHelper, pointLight };
 }
 
-// Flicker the light's colour by stacking sine waves at different speeds for a
-// chaotic, fire-like wobble. The "fed" baseline tracks the shared furnace
-// intensity; the blast pulse pops the hot core. showHelper toggles the wireframe.
+// Flicker the hot core + creature point light with the fire. The "fed" baseline
+// tracks the shared furnace intensity; the blast pulse pops both. showHelper toggles
+// the debug wireframe.
 export function updateLighting(lighting: Lighting, furnace: Furnace, time: number, showHelper: boolean): void {
     const fLocal = flicker(time); // chaotic — drives the tight hot core
-    const fCalm = flickerCalm(time); // gentle breath — drives the room-wide glow
+    const fCalm = flickerCalm(time); // gentle breath — drives the creature point light
 
     const fed = THREE.MathUtils.clamp(furnace.intensity, 0, 1); // 0 = resting, 1 = fully fed
 
-    // Broad glow: a calm, low-variance breath on top of the rest → fed baseline.
-    const hue = BASE_HUE + fCalm * GLOBAL_HUE_AMP;
-    const saturation = 0.7;
-    const baseLightness = THREE.MathUtils.lerp(BASE_LIGHTNESS_REST, BASE_LIGHTNESS_FED, fed);
-    const lightness = THREE.MathUtils.clamp(baseLightness + fCalm * GLOBAL_FLICKER_AMP, 0, 1);
-    lighting.light.color.setHSL(hue, saturation, lightness);
-
     const baseIntensity = THREE.MathUtils.lerp(POINT_LIGHT_REST, POINT_LIGHT_FED, fed);
-    lighting.pointLight.intensity = baseIntensity * (1 + fCalm * POINT_LIGHT_FLICKER);
+    lighting.pointLight.intensity = (baseIntensity + furnace.pulse * POINT_LIGHT_PULSE) * (1 + fCalm * POINT_LIGHT_FLICKER);
 
-    // Hot core: chaotic, punchy flicker + a hard pop on each coal-blast pulse — the
-    // lively boiler that offsets the calm room.
+    // Hot core: chaotic, punchy flicker + a hard pop on each coal-blast pulse.
     const coreLightness = THREE.MathUtils.clamp(
         THREE.MathUtils.lerp(CORE_LIGHTNESS_REST, CORE_LIGHTNESS_FED, fed) + furnace.pulse * CORE_PULSE + fLocal * CORE_FLICKER_AMP,
         0,
@@ -162,10 +149,23 @@ export function updateLighting(lighting: Lighting, furnace: Furnace, time: numbe
     );
     lighting.core.color.setHSL(CORE_HUE, CORE_SAT, coreLightness);
 
-    lighting.helper.visible = showHelper;
+    // Room ambient: multiply toward a dark warm, lifting as the fire is fed, and
+    // flickering in sync with the fire — blend the chaotic core flicker into the calm
+    // room breath so the room tracks the fire's rhythm (connected) without going wild.
+    const fRoom = fCalm * 0.5 + fLocal * 0.5;
+    const ambientL = THREE.MathUtils.clamp(
+        THREE.MathUtils.lerp(AMBIENT_MUL_REST, AMBIENT_MUL_FED, fed) + fRoom * AMBIENT_FLICKER_AMP,
+        0,
+        1,
+    );
+    const ambientSat = THREE.MathUtils.clamp(AMBIENT_SAT + fRoom * AMBIENT_SAT_AMP, 0, 1);
+    const ambientHue = AMBIENT_HUE + fRoom * AMBIENT_HUE_AMP;
+    lighting.ambient.color.setHSL(ambientHue, ambientSat, ambientL);
+
     lighting.coreHelper.visible = showHelper;
+    lighting.ambientHelper.visible = showHelper;
     if (showHelper) {
-        (lighting.helper.material as THREE.MeshBasicMaterial).color.copy(lighting.light.color);
         (lighting.coreHelper.material as THREE.MeshBasicMaterial).color.copy(lighting.core.color);
+        (lighting.ambientHelper.material as THREE.MeshBasicMaterial).color.copy(lighting.ambient.color);
     }
 }

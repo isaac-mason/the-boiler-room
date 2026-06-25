@@ -14,7 +14,7 @@ export const COLLIDER_URL = `${BASE}collider.bin`;
 export const NAVMESH_URL = `${BASE}navmesh.json`;
 
 // --- Camera framing (world-space) ---
-export const CAMERA_POSITION: Vec3 = [-0.39, 0.91, -0.19];
+export const CAMERA_POSITION: Vec3 = [-0.50, 0.43, -0.66];
 export const CAMERA_TARGET: Vec3 = [-0.8, 0.4, -2];
 
 // --- World landmarks (world-space) ---

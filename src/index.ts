@@ -7,7 +7,7 @@ import { initCoal, spawnCoalClump, updateCoal } from './coal';
 import { type Collider, unpackCollider } from './collider-schema';
 import { initCreatures, spawnCreatures, updateCreaturesPostStep, updateCreaturesPreStep } from './creatures';
 import { attachDebugRaycast, createDebugOverlay, updateDebugOverlay, updatePhysicsDebug } from './debug';
-import { initDust, updateDust } from './dust';
+import { initDust } from './dust';
 import { initFurnace, updateFurnace } from './furnace';
 import { initHeat, updateHeat } from './heat';
 import { attachInteraction } from './interaction';
@@ -24,8 +24,8 @@ function init() {
 
     // Fill light for the standard-material meshes (creatures). Spark splats are
     // self-lit and ignore three lights, so this only illuminates the creatures.
-    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-    const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x2a1c12, 0.8);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x2a1c12, 0.5);
     scene.add(hemi);
 
     const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -77,14 +77,14 @@ function init() {
     const furnace = initFurnace();
 
     const lighting = initLighting();
-    scene.add(lighting.layer);
     scene.add(lighting.coreLayer);
-    scene.add(lighting.helper);
     scene.add(lighting.coreHelper);
+    scene.add(lighting.ambientLayer);
+    scene.add(lighting.ambientHelper);
     scene.add(lighting.pointLight);
 
     const dust = initDust();
-    scene.add(dust.points);
+    scene.add(dust.mesh);
 
     const creatures = initCreatures(physics);
     scene.add(creatures.mesh);
@@ -179,11 +179,9 @@ function update(state: State, dt: number, time: number) {
     updateCreaturesPostStep(state.creatures, state.physics, dt);
     updateCoal(state.coal);
     updateSparks(state.sparks, dt);
-    updateDust(state.dust, time, state.furnace.intensity);
     state.controls.update();
     updateLighting(state.lighting, state.furnace, time, state.debug.showLights);
     updateHeat(state.heat, state.furnace);
-    // Push runtime perf settings (LOD budget, …) onto the renderer.
     applyPerformance(state.perf, state.spark);
     updateDebugOverlay(state.debug, state.camera, state.controls, state.furnace, state.spark);
     updatePhysicsDebug(state.debug, state.physics.world);

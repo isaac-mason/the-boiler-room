@@ -1,9 +1,13 @@
+import { dyno, SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
-import { flicker, LIGHT_ORIGIN } from './lighting';
 
-// Floating dust as a GPU-animated THREE.Points cloud. Each mote drifts in the
-// vertex shader (no per-frame CPU work, no Spark sort jitter) and brightens as it
-// nears the boiler light, with the glow pulsing on the shared fire flicker.
+// Floating dust as REAL Gaussian splats (a generated SplatMesh) rather than a
+// THREE.Points cloud. Being splats, they sort + blend together with the environment
+// splats, so they occlude correctly (a mote behind a wall is hidden) and they're lit
+// for free by the boiler SDF light — which also makes them pulse with the fire.
+// A GPU worldModifier drifts each mote (sway + bob); no per-frame CPU work.
+
+const { dynoBlock, defineGsplat, unindentLines } = dyno;
 
 const COUNT = 2500;
 
@@ -11,123 +15,70 @@ const COUNT = 2500;
 const BOUNDS_MIN = new THREE.Vector3(-2.3, 0.2, -4);
 const BOUNDS_MAX = new THREE.Vector3(1, 2.5, 1);
 
-const vertexShader = /* glsl */ `
-    uniform float uTime;
-    uniform vec3 uLightPos;
-    uniform vec3 uLightColor;
-    uniform float uLightIntensity;
-    uniform float uLightRadius;
-    uniform float uCoreRadius;
-    uniform float uCoreBoost;
-    uniform float uSize;
-    uniform float uPixelRatio;
-    uniform vec3 uBaseColor;
-    uniform float uBaseAlpha;
-    uniform float uLitAlpha;
-    uniform float uSway;
-    uniform float uBob;
+const MOTE_SCALE = 0.0016; // base gaussian size (metres); jittered per mote
+const BASE_OPACITY = 1; // low → the gaussian falloff shows (soft, feathered motes, not solid balls)
+const BASE_COLOR = new THREE.Color(0.85, 0.7, 0.5); // warm, self-visible; the SDF adds extra glow near the boiler
 
-    attribute float aSeed;
-
-    varying vec3 vColor;
-    varying float vAlpha;
-
-    void main() {
-        float phase = aSeed * 6.2831853;
-        vec3 p = position;
-        p.x += sin(uTime * 0.25 + phase) * uSway;
-        p.y += sin(uTime * 0.30 + phase) * uBob;
-        p.z += cos(uTime * 0.20 + phase) * uSway;
-
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(uSize * uPixelRatio / -mv.z, 1.0, 64.0);
-
-        // brighten as the mote nears the boiler light, pulsing with the flicker
-        float d = distance(p, uLightPos);
-        float glow = clamp((1.0 - smoothstep(0.0, uLightRadius, d)) * uLightIntensity, 0.0, 1.0);
-        // tight, intense hot core right at the boiler — sells the heat coming off it
-        float core = pow(max(1.0 - d / uCoreRadius, 0.0), 2.0) * uLightIntensity;
-        vColor = mix(uBaseColor, uLightColor, glow) + uLightColor * core * uCoreBoost;
-        vAlpha = clamp(mix(uBaseAlpha, uLitAlpha, glow) + core * 0.4, 0.0, 1.0);
-    }
-`;
-
-const fragmentShader = /* glsl */ `
-    varying vec3 vColor;
-    varying float vAlpha;
-
-    void main() {
-        // soft round mote (1 at centre → 0 at edge). smoothstep needs edge0<edge1,
-        // so invert rather than smoothstep(0.5, 0.0, d) (which is undefined in GLSL).
-        float d = length(gl_PointCoord - 0.5);
-        // soft feathered mote: small core, wide falloff to the edge
-        float a = (1.0 - smoothstep(0.15, 0.5, d)) * vAlpha;
-        if (a < 0.002) discard;
-        gl_FragColor = vec4(vColor, a);
-    }
-`;
+const SWAY = 0.06; // horizontal drift amplitude (metres)
+const BOB = 0.05; // vertical drift amplitude (metres)
 
 export type Dust = {
-    points: THREE.Points;
-    material: THREE.ShaderMaterial;
+    /** The dust SplatMesh — add to your scene. */
+    mesh: SplatMesh;
 };
 
 export function initDust(): Dust {
+    // GPU drift: nudge each mote's world position by a slow per-mote sine sway/bob.
+    // Phase is seeded from the mote's (original) position so each drifts independently.
+    const modifier = dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
+        if (!gsplat) throw new Error('dust modifier: no gsplat input');
+
+        const node = dyno.dyno({
+            inTypes: { gsplat: dyno.Gsplat, time: 'float' },
+            outTypes: { gsplat: dyno.Gsplat },
+            inputs: { gsplat, time: SplatMesh.dynoTime }, // dynoTime auto-updated each frame
+            globals: () => [defineGsplat],
+            statements: ({ inputs, outputs }) => {
+                const g = outputs.gsplat;
+                return unindentLines(`
+                    ${g} = ${inputs.gsplat};
+                    vec3 c0 = ${inputs.gsplat}.center;
+                    float phase = fract(sin(dot(c0.xz, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+                    float t = ${inputs.time};
+                    ${g}.center = c0 + vec3(
+                        sin(t * 0.25 + phase) * ${SWAY.toFixed(3)},
+                        sin(t * 0.30 + phase) * ${BOB.toFixed(3)},
+                        cos(t * 0.20 + phase) * ${SWAY.toFixed(3)}
+                    );
+                `);
+            },
+        });
+
+        return { gsplat: node.outputs.gsplat };
+    });
+
     const size = new THREE.Vector3().subVectors(BOUNDS_MAX, BOUNDS_MIN);
+    const center = new THREE.Vector3();
+    const scales = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
 
-    const positions = new Float32Array(COUNT * 3);
-    const seeds = new Float32Array(COUNT);
-    for (let i = 0; i < COUNT; i++) {
-        positions[i * 3] = BOUNDS_MIN.x + Math.random() * size.x;
-        positions[i * 3 + 1] = BOUNDS_MIN.y + Math.random() * size.y;
-        positions[i * 3 + 2] = BOUNDS_MIN.z + Math.random() * size.z;
-        seeds[i] = Math.random();
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
-
-    const material = new THREE.ShaderMaterial({
-        vertexShader,
-        fragmentShader,
-        transparent: true,
-        depthWrite: false, // transparent — don't occlude others, but DO get occluded (depthTest stays on)
-        blending: THREE.NormalBlending,
-        uniforms: {
-            uTime: { value: 0 },
-            uLightPos: { value: LIGHT_ORIGIN.clone() },
-            uLightColor: { value: new THREE.Color(1.0, 0.62, 0.28) }, // super-bright glow at the boiler
-            uLightIntensity: { value: 0 },
-            uLightRadius: { value: 6 }, // falloff radius of the boiler bloom
-            uCoreRadius: { value: 2.0 }, // tight hot core radius near the boiler
-            uCoreBoost: { value: 1.8 }, // how much hotter/brighter the core is
-            uSize: { value: 9.0 }, // base point size factor (× pixelRatio / depth)
-            uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-            uBaseColor: { value: new THREE.Color(0.7, 0.58, 0.45) }, // warm ambient — full room is lit
-            uBaseAlpha: { value: 0.55 }, // every mote is clearly visible
-            uLitAlpha: { value: 1.0 }, // pops at the boiler
-            uSway: { value: 0.06 },
-            uBob: { value: 0.05 },
+    const mesh = new SplatMesh({
+        maxSplats: COUNT,
+        editable: true, // let the boiler SDF light tint the motes (global SplatEdits)
+        worldModifier: modifier,
+        constructSplats: (splats) => {
+            for (let i = 0; i < COUNT; i++) {
+                center.set(
+                    BOUNDS_MIN.x + Math.random() * size.x,
+                    BOUNDS_MIN.y + Math.random() * size.y,
+                    BOUNDS_MIN.z + Math.random() * size.z,
+                );
+                scales.setScalar(MOTE_SCALE * (0.6 + Math.random() * 0.8)); // varied mote sizes
+                const opacity = BASE_OPACITY * (0.7 + Math.random() * 0.6);
+                splats.pushSplat(center, scales, quaternion, opacity, BASE_COLOR);
+            }
         },
     });
 
-    const points = new THREE.Points(geometry, material);
-    points.frustumCulled = false; // motes drift outside the static bounds
-    // The splat is transparent and writes no depth, so transparent sort order
-    // between it and the dust flips with the camera. Force the dust to draw after
-    // the splat for stable visibility; depthTest still lets the opaque creatures/coal
-    // occlude it.
-    points.renderOrder = 10;
-
-    return { points, material };
-}
-
-// `heat` is the shared furnace intensity (0..1). Motes near the boiler glow
-// brighter as the fire is stoked, on top of the per-frame flicker (~-1..1).
-export function updateDust(dust: Dust, time: number, heat: number): void {
-    const u = dust.material.uniforms;
-    u.uTime.value = time;
-    u.uLightIntensity.value = THREE.MathUtils.clamp(0.4 + heat * 0.4 + flicker(time) * 0.45, 0, 1);
+    return { mesh };
 }

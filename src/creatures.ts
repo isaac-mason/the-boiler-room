@@ -144,7 +144,7 @@ const EYE_RESTITUTION = 0.5; // bounce off the eye rim
 // Swarm spawns in a disc around this world point, dropped a little above so the
 // suspension settles them onto the floor.
 const SPAWN_CENTER: Vec3 = [-0.75, -0.04, -2.01];
-const SPAWN_RADIUS = 0.7; // horizontal spread (snapped onto the navmesh)
+const SPAWN_RADIUS = 0.5; // horizontal spread (snapped onto the navmesh)
 
 const INSTANCES_PER_CREATURE = 1 + N_LEGS * LEG_SEGMENTS + N_ARMS * ARM_SEGMENTS + N_EYES * 2;
 

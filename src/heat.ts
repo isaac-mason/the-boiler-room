@@ -13,7 +13,7 @@ import { LIGHT_ORIGIN } from './lighting';
 const { dynoBlock, dynoFloat, dynoVec3, defineGsplat, unindentLines } = dyno;
 
 // World-space radius of the hot zone around the furnace.
-const RADIUS = 1.1;
+const RADIUS = 0.85;
 
 // Max world-space displacement (metres) at the core. Small — shimmer is a subtle bend.
 const STRENGTH = 0.012;
