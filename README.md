@@ -20,8 +20,6 @@ A Gaussian-splat scene that's *alive*: physics, a navmesh crowd of little coal-h
 | Navigation | [navcat](https://www.npmjs.com/package/navcat) (solo navmesh + crowd steering) |
 | Math | [mathcat](https://www.npmjs.com/package/mathcat) |
 | Binary asset packing | [packcat](https://www.npmjs.com/package/packcat) |
-| Language / build | TypeScript + [Vite](https://vite.dev) |
-| Lint / format | [Biome](https://biomejs.dev) |
 
 ## Quick start
 
