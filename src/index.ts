@@ -39,17 +39,24 @@ function init() {
     app.appendChild(renderer.domElement);
 
     // SparkRenderer drives splat sorting and LOD streaming/updates for the .rad file.
-    // Widen the LOD foveation cone so splats near the screen corners stay full-res
-    // (defaults: coneFov0 90, coneFov 120, coneFoveate 0.4).
+    // enableLod + enableLodFetching turn on LOD paging (both default true — kept
+    // explicit so the paging contract is obvious). Widen the LOD foveation cone so
+    // splats near the screen corners stay full-res (defaults: coneFov0 90, coneFov
+    // 120, coneFoveate 0.4).
     const spark = new SparkRenderer({
         renderer,
+        enableLod: true,
+        enableLodFetching: true,
         coneFov0: 120,
         coneFov: 160,
         coneFoveate: 0.5,
     });
     scene.add(spark);
 
-    const splat = new SplatMesh({ url: encodeURI(SPLAT_URL) });
+    // paged: true is REQUIRED for a .rad (LOD-paged) asset — Spark only decodes .rad
+    // through its PagedSplats path. Without it the mesh falls back to PackedSplats,
+    // which has no .rad decoder, so nothing streams in. rootUrl is taken from `url`.
+    const splat = new SplatMesh({ url: encodeURI(SPLAT_URL), paged: true });
     scene.add(splat);
 
     // Heat shimmer: wobble the scene splats near the furnace (see heat.ts).
@@ -177,7 +184,7 @@ function update(state: State, dt: number, time: number) {
     updateCreaturesPreStep(state.creatures, state.navigation, state.physics, dt);
     updatePhysics(state.physics, dt);
     updateCreaturesPostStep(state.creatures, state.physics, dt);
-    updateCoal(state.coal);
+    updateCoal(state.coal, state.physics, dt);
     updateSparks(state.sparks, dt);
     state.controls.update();
     updateLighting(state.lighting, state.furnace, time, state.debug.showLights);
