@@ -100,6 +100,7 @@ function init() {
 
     const creatures = initCreatures(physics);
     scene.add(creatures.mesh);
+    scene.add(creatures.eyeMesh); // eyes render separately so they cast no shadows
 
     const coal = initCoal();
     scene.add(coal.mesh);

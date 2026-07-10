@@ -139,17 +139,28 @@ const N_EYES = 2;
 
 // Googly-eye pupil physics (in eye-local normalised units: disc radius = 1).
 const EYE_MAX = (EYE_RADIUS - IRIS_RADIUS) / EYE_RADIUS; // how far the pupil can roam
-const EYE_GRAVITY = 11; // pupil droops downward
-const EYE_MOVE_GAIN = 0.22; // how strongly body motion flings the pupil (inertia)
-const EYE_DAMP = 0.86; // per-frame velocity damping
-const EYE_RESTITUTION = 0.5; // bounce off the eye rim
+// Walking: a centering spring holds the pupil near the middle (looking forward), so it
+// only twitches off-centre on footfalls and settles straight back. Ragdolling: no spring
+// and real gravity, so the pupil hangs and swings as a free bead while the body tumbles.
+const EYE_CENTER_WALK = 11; // spring stiffness pulling the pupil back to forward
+const EYE_GRAVITY_WALK = 1.5; // slight downward bias so the forward gaze isn't dead-perfect
+const EYE_GRAVITY_RAGDOLL = 6; // full droop while tumbling
+// How hard socket ACCELERATION flings the pupil (this is what makes it "bouncy"). Low
+// while walking so footfalls barely nudge it; high while ragdolling so a tumble whips it.
+const EYE_INERTIA_WALK = 0.12;
+const EYE_INERTIA_RAGDOLL = 0.55;
+const EYE_DAMP = 0.95; // per-frame velocity damping (higher = rings/wobbles longer)
+const EYE_RESTITUTION = 0.85; // bounce off the eye rim (higher = rattlier)
 
 // Swarm spawns in a disc around this world point, dropped a little above so the
 // suspension settles them onto the floor.
 const SPAWN_CENTER: Vec3 = [-0.75, -0.04, -2.01];
 const SPAWN_RADIUS = 0.5; // horizontal spread (snapped onto the navmesh)
 
-const INSTANCES_PER_CREATURE = 1 + N_LEGS * LEG_SEGMENTS + N_ARMS * ARM_SEGMENTS + N_EYES * 2;
+// Body + limbs live in the shadow-casting mesh; the eyes (flat discs, whose shadows
+// look wrong) live in a separate non-casting mesh — hence the two instance counts.
+const EYE_INSTANCES_PER_CREATURE = N_EYES * 2; // white + iris per eye
+const BODY_INSTANCES_PER_CREATURE = 1 + N_LEGS * LEG_SEGMENTS + N_ARMS * ARM_SEGMENTS;
 
 /* ---------------- limb definitions (shared by every creature) ---------------- */
 
@@ -261,7 +272,8 @@ export type Creature = {
 
 export type Creatures = {
     mesh: THREE.BatchedMesh;
-    geo: { body: number; limb: number; eye: number };
+    eyeMesh: THREE.BatchedMesh; // eyes are a separate mesh so they don't cast shadows
+    geo: { body: number; limb: number; eye: number }; // body/limb ids in `mesh`, eye id in `eyeMesh`
     list: Creature[];
     // Downward ground ray filter (static collider only), bound to the world, so
     // it's created in initCreatures and lives here, concrete. Used for kinematic body
@@ -278,6 +290,7 @@ const footCollector = createClosestCastRayCollector();
 const footSettings = createDefaultCastRaySettings();
 
 const UP: Vec3 = [0, 1, 0];
+const UNIT_X: Vec3 = [1, 0, 0];
 const FORWARD: Vec3 = [0, 0, 1]; // body-local forward (the +Z the creature faces)
 const UPRIGHT: Quat = [0, 0, 0, 1]; // identity orientation (used on ragdoll recovery)
 
@@ -292,6 +305,8 @@ const _armRest: Vec3 = [0, 0, 0];
 const _attachWorld: Vec3 = [0, 0, 0];
 const _eyeWorld: Vec3 = [0, 0, 0];
 const _eyeQuat: Quat = quat.create();
+const _eyeRight: Vec3 = [0, 0, 0];
+const _eyeUp: Vec3 = [0, 0, 0];
 const _iris: Vec3 = [0, 0, 0];
 const _targetQuat: Quat = quat.create();
 const _quatConj: Quat = quat.create();
@@ -367,21 +382,27 @@ export function initCreatures(physics: Physics): Creatures {
 
     const material = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.0, side: THREE.DoubleSide });
 
-    const maxInstances = CREATURE_COUNT * INSTANCES_PER_CREATURE;
-    const maxVerts = bodyGeo.attributes.position.count + limbGeo.attributes.position.count + eyeGeo.attributes.position.count;
-    const maxIndices = (bodyGeo.index?.count ?? 0) + (limbGeo.index?.count ?? 0) + (eyeGeo.index?.count ?? 0);
-
-    const mesh = new THREE.BatchedMesh(maxInstances, maxVerts, maxIndices, material);
+    // Body + limbs: cast and receive the furnace shadows (they self-shadow each other).
+    const bodyVerts = bodyGeo.attributes.position.count + limbGeo.attributes.position.count;
+    const bodyIndices = (bodyGeo.index?.count ?? 0) + (limbGeo.index?.count ?? 0);
+    const mesh = new THREE.BatchedMesh(CREATURE_COUNT * BODY_INSTANCES_PER_CREATURE, bodyVerts, bodyIndices, material);
     mesh.perObjectFrustumCulled = false; // instances animate every frame
     mesh.frustumCulled = false;
-    // Cast and receive the furnace shadows (creatures self-shadow and shadow each other).
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+
+    // Eyes: a separate mesh that never casts shadows — flat-disc shadows look wrong, and
+    // the googly pupils shouldn't leave shadow specks on the floor.
+    const eyeMesh = new THREE.BatchedMesh(CREATURE_COUNT * EYE_INSTANCES_PER_CREATURE, eyeGeo.attributes.position.count, eyeGeo.index?.count ?? 0, material);
+    eyeMesh.perObjectFrustumCulled = false;
+    eyeMesh.frustumCulled = false;
+    eyeMesh.castShadow = false;
+    eyeMesh.receiveShadow = false;
 
     const geo = {
         body: mesh.addGeometry(bodyGeo),
         limb: mesh.addGeometry(limbGeo),
-        eye: mesh.addGeometry(eyeGeo),
+        eye: eyeMesh.addGeometry(eyeGeo),
     };
 
     // Ground rays should only hit the static collider, never other (kinematic)
@@ -389,7 +410,7 @@ export function initCreatures(physics: Physics): Creatures {
     const groundFilter = filter.forWorld(physics.world);
     groundFilter.bodyFilter = (b) => b.motionType === MotionType.STATIC;
 
-    return { mesh, geo, list: [], groundFilter };
+    return { mesh, eyeMesh, geo, list: [], groundFilter };
 }
 
 export function spawnCreatures(creatures: Creatures, physics: Physics, navigation: Navigation): void {
@@ -428,7 +449,7 @@ export function spawnCreatures(creatures: Creatures, physics: Physics, navigatio
             local: [0, 0, 0],
         }));
 
-        const { mesh, geo } = creatures;
+        const { mesh, eyeMesh, geo } = creatures;
         const bodyInstance = mesh.addInstance(geo.body);
         mesh.setColorAt(bodyInstance, COLOR_BODY);
 
@@ -447,10 +468,10 @@ export function spawnCreatures(creatures: Creatures, physics: Physics, navigatio
             }),
         );
         const eyeInstances = eyes.map(() => {
-            const white = mesh.addInstance(geo.eye);
-            mesh.setColorAt(white, COLOR_EYE);
-            const iris = mesh.addInstance(geo.eye);
-            mesh.setColorAt(iris, COLOR_IRIS);
+            const white = eyeMesh.addInstance(geo.eye);
+            eyeMesh.setColorAt(white, COLOR_EYE);
+            const iris = eyeMesh.addInstance(geo.eye);
+            eyeMesh.setColorAt(iris, COLOR_IRIS);
             return { white, iris };
         });
 
@@ -687,24 +708,65 @@ function solveArms(creature: Creature): void {
     }
 }
 
-// Googly pupil: a damped pendulum in the eye's 2D plane (≈ world XY, eyes face
-// +Z). Droops down under gravity, gets flung opposite to the body's motion
-// (inertia), and bounces off the eye rim. All in normalised (eye-radius) units.
-function updateEye(eye: Eye, worldPos: Vec3, dt: number): void {
+// Advance both googly pupils. Computes the eye's world facing once so the physics runs
+// in the eye's own plane — the pupils droop toward true world-down and swing round as
+// the body tilts or tumbles, not just when it's upright.
+function updateEyes(creature: Creature, dt: number): void {
+    quat.mul(_eyeQuat, creature.quaternion, EYE_QUATERNION);
+    vec3.transformQuat(_eyeRight, UNIT_X, _eyeQuat); // eye-plane +X in world space
+    vec3.transformQuat(_eyeUp, UP, _eyeQuat); // eye-plane +Y in world space
+    const ragdoll = creature.mode === 'ragdoll';
+    const inertia = ragdoll ? EYE_INERTIA_RAGDOLL : EYE_INERTIA_WALK;
+    const gravity = ragdoll ? EYE_GRAVITY_RAGDOLL : EYE_GRAVITY_WALK;
+    const center = ragdoll ? 0 : EYE_CENTER_WALK; // spring holds the walking gaze forward
+    for (let i = 0; i < creature.eyes.length; i++) {
+        bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
+        updateEye(creature.eyes[i], _eyeWorld, inertia, gravity, center, dt);
+    }
+}
+
+// Googly pupil: a free bead rolling in the eye's 2D plane. It's driven by two forces
+// projected onto the plane basis (_eyeRight/_eyeUp): world gravity, so it sags toward
+// the true low point of the eye (as the head rolls, "down" travels round the rim); and
+// a pseudo-force opposite the socket's ACCELERATION, so every footfall, turn and tumble
+// flings it. Bounces off the rim. All in normalised (eye-radius) units.
+function updateEye(eye: Eye, worldPos: Vec3, inertia: number, gravity: number, center: number, dt: number): void {
+    if (!eye.prev) {
+        // First frame: seed the socket position + velocity, skip (no bogus fling).
+        eye.prev = [0, 0, 0];
+        vec3.copy(eye.current, worldPos);
+        return;
+    }
     if (dt <= 0) {
         vec3.copy(eye.current, worldPos);
         return;
     }
 
-    // body motion this frame → normalised velocity (the pupil lags behind it)
-    const inv = 1 / (EYE_RADIUS * dt);
-    const vx = (worldPos[0] - eye.current[0]) * inv;
-    const vy = (worldPos[1] - eye.current[1]) * inv;
+    // Socket world velocity this frame, and its change since last frame (acceleration).
+    const invDt = 1 / dt;
+    const vx = (worldPos[0] - eye.current[0]) * invDt;
+    const vy = (worldPos[1] - eye.current[1]) * invDt;
+    const vz = (worldPos[2] - eye.current[2]) * invDt;
+    const pv = eye.prev;
+    const ax = (vx - pv[0]) * invDt;
+    const ay = (vy - pv[1]) * invDt;
+    const az = (vz - pv[2]) * invDt;
+    pv[0] = vx;
+    pv[1] = vy;
+    pv[2] = vz;
     vec3.copy(eye.current, worldPos);
 
-    // accumulate pupil velocity: inertia (opposite to motion) + gravity
-    eye.velocity[0] += -vx * EYE_MOVE_GAIN * dt;
-    eye.velocity[1] += (-vy * EYE_MOVE_GAIN - EYE_GRAVITY) * dt;
+    // Socket acceleration and world-down gravity, both projected into the eye plane.
+    const invR = 1 / EYE_RADIUS;
+    const aRight = (ax * _eyeRight[0] + ay * _eyeRight[1] + az * _eyeRight[2]) * invR;
+    const aUp = (ax * _eyeUp[0] + ay * _eyeUp[1] + az * _eyeUp[2]) * invR;
+    const gRight = -_eyeRight[1];
+    const gUp = -_eyeUp[1];
+
+    // gravity pulls toward the low point; a centering spring pulls back to forward;
+    // -acceleration flings the pupil (inertia)
+    eye.velocity[0] += (gRight * gravity - center * eye.local[0] - aRight * inertia) * dt;
+    eye.velocity[1] += (gUp * gravity - center * eye.local[1] - aUp * inertia) * dt;
 
     const damp = EYE_DAMP ** (dt * 60);
     eye.velocity[0] *= damp;
@@ -753,7 +815,8 @@ function writeLimb(mesh: THREE.BatchedMesh, creature: Creature, chain: Chain, id
     }
 }
 
-function writeCreature(mesh: THREE.BatchedMesh, creature: Creature): void {
+function writeCreature(creatures: Creatures, creature: Creature): void {
+    const { mesh, eyeMesh } = creatures;
     const pos = creature.position;
 
     // body
@@ -773,14 +836,14 @@ function writeCreature(mesh: THREE.BatchedMesh, creature: Creature): void {
         bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
 
         vec3.set(_scaleV, EYE_RADIUS, EYE_RADIUS, EYE_RADIUS);
-        setInstance(mesh, inst.white, _eyeWorld, _eyeQuat, _scaleV);
+        setInstance(eyeMesh, inst.white, _eyeWorld, _eyeQuat, _scaleV);
 
         // iris: offset within the eye plane (jiggle) + slightly proud of the surface
         vec3.set(_iris, creature.eyes[i].local[0] * EYE_RADIUS, creature.eyes[i].local[1] * EYE_RADIUS, EYE_RADIUS * 0.15);
         vec3.transformQuat(_iris, _iris, _eyeQuat);
         vec3.add(_iris, _iris, _eyeWorld);
         vec3.set(_scaleV, IRIS_RADIUS, IRIS_RADIUS, IRIS_RADIUS);
-        setInstance(mesh, inst.iris, _iris, _eyeQuat, _scaleV);
+        setInstance(eyeMesh, inst.iris, _iris, _eyeQuat, _scaleV);
     }
 }
 
@@ -987,11 +1050,8 @@ export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, 
         if (creature.mode === 'ragdoll') {
             quat.copy(creature.quaternion, creature.body.quaternion); // full tumbling orientation
             ragdollLimbs(creature, dt);
-            for (let i = 0; i < creature.eyes.length; i++) {
-                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
-                updateEye(creature.eyes[i], _eyeWorld, dt);
-            }
-            writeCreature(creatures.mesh, creature);
+            updateEyes(creature, dt);
+            writeCreature(creatures, creature);
             continue;
         }
 
@@ -1013,11 +1073,8 @@ export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, 
                 vec3.lerp(arm.getupLocal, arm.getupLocal, _armRest, Math.min(dt * GETUP_ARM_RATE, 1));
                 solveLimb(arm, arm.getupLocal, false, ARM_IK_ITERATIONS);
             }
-            for (let i = 0; i < creature.eyes.length; i++) {
-                bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
-                updateEye(creature.eyes[i], _eyeWorld, dt);
-            }
-            writeCreature(creatures.mesh, creature);
+            updateEyes(creature, dt);
+            writeCreature(creatures, creature);
             continue;
         }
 
@@ -1032,12 +1089,9 @@ export function updateCreaturesPostStep(creatures: Creatures, physics: Physics, 
         creature.armPhase = (creature.armPhase + dt * armFreq) % 1;
         solveArms(creature);
 
-        for (let i = 0; i < creature.eyes.length; i++) {
-            bodyToWorld(_eyeWorld, EYE_OFFSETS[i], creature);
-            updateEye(creature.eyes[i], _eyeWorld, dt);
-        }
+        updateEyes(creature, dt);
 
-        writeCreature(creatures.mesh, creature);
+        writeCreature(creatures, creature);
     }
 }
 
