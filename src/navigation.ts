@@ -28,6 +28,8 @@ export type Navigation = {
     navMesh: NavMesh | null;
     navMeshHelper: DebugObject | null;
     crowd: crowd.Crowd | null;
+    /** Wireframe cylinders showing each crowd agent's collision capsule (debug). */
+    agentDebug: THREE.Group | null;
 };
 
 export function initNavigation(): Navigation {
@@ -35,6 +37,7 @@ export function initNavigation(): Navigation {
         navMesh: null,
         navMeshHelper: null,
         crowd: null,
+        agentDebug: null,
     };
 }
 
@@ -162,5 +165,70 @@ export function updateNavigation(navigation: Navigation, scene: THREE.Scene, sho
         scene.remove(navigation.navMeshHelper.object);
         navigation.navMeshHelper.dispose();
         navigation.navMeshHelper = null;
+    }
+}
+
+// Shared unit cylinder (radius 1, height 1, base at y=0) + material for agent capsules.
+// Each agent reuses these, scaled to its radius/height — so toggling is allocation-free
+// after the first frame. Cylinder (not capsule) because agent height < 2·radius here, so
+// a real capsule would collapse to a blob; the cylinder shows the detour collision volume.
+let agentCapsuleGeo: THREE.CylinderGeometry | null = null;
+let agentCapsuleMat: THREE.MeshBasicMaterial | null = null;
+
+// Draw a wireframe cylinder per crowd agent sized to its radius/height, positioned with
+// its base on the navmesh (the agent's feet). Toggled by the debug panel; reconciles the
+// cylinder pool to the live agent set each frame while shown.
+export function updateAgentDebug(navigation: Navigation, scene: THREE.Scene, show: boolean): void {
+    if (!show) {
+        if (navigation.agentDebug) navigation.agentDebug.visible = false;
+        return;
+    }
+    if (!navigation.crowd) return;
+
+    if (!navigation.agentDebug) {
+        navigation.agentDebug = new THREE.Group();
+        navigation.agentDebug.frustumCulled = false;
+        scene.add(navigation.agentDebug);
+    }
+    const group = navigation.agentDebug;
+    group.visible = true;
+
+    if (!agentCapsuleGeo) {
+        // Unit cylinder translated so its base sits at y=0 (agent position = feet).
+        agentCapsuleGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true);
+        agentCapsuleGeo.translate(0, 0.5, 0);
+    }
+    if (!agentCapsuleMat) {
+        // transparent + depthTest:false + high renderOrder → draws on top of the splats.
+        agentCapsuleMat = new THREE.MeshBasicMaterial({
+            color: 0x00e5ff,
+            wireframe: true,
+            depthTest: false,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.7,
+        });
+    }
+
+    const agents = navigation.crowd.agents;
+    const seen = new Set<string>();
+    for (const id in agents) {
+        const agent = agents[id];
+        let mesh = group.getObjectByName(id) as THREE.Mesh | undefined;
+        if (!mesh) {
+            mesh = new THREE.Mesh(agentCapsuleGeo, agentCapsuleMat);
+            mesh.name = id;
+            mesh.frustumCulled = false;
+            mesh.renderOrder = 1000;
+            mesh.raycast = () => {};
+            group.add(mesh);
+        }
+        mesh.position.set(agent.position[0], agent.position[1], agent.position[2]);
+        mesh.scale.set(agent.radius, agent.height, agent.radius);
+        seen.add(id);
+    }
+    // Drop cylinders for agents that no longer exist (e.g. removed on despawn).
+    for (const child of [...group.children]) {
+        if (!seen.has(child.name)) group.remove(child);
     }
 }

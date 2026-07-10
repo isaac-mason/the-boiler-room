@@ -39,6 +39,12 @@ const POINT_LIGHT_REST = 2; // dim resting intensity
 const POINT_LIGHT_FED = 8; // intensity with the fire fed
 const POINT_LIGHT_FLICKER = 0.3; // fraction of base the (calm) flicker swings on the creatures
 const POINT_LIGHT_PULSE = 5; // extra point-light intensity on a coal-blast pulse → flares the creatures
+// The point light doubles as the shadow caster. Lift it above the coal bed so shadows
+// fall down-and-out instead of streaking flat, and range-limit it so the furnace
+// doesn't light the far walls. The SDF glow stays at LIGHT_ORIGIN; only this moves.
+const POINT_LIGHT_HEIGHT = 0.4; // metres above LIGHT_ORIGIN
+const POINT_LIGHT_DISTANCE = 5; // range at which the light fades to nothing (falloff)
+const POINT_LIGHT_DECAY = 2; // physically-correct inverse-square falloff (three default)
 
 // Room-wide ambient in the spirit of the Spark dynamic-lighting example: a
 // *multiplicative* edit (not additive!) that scales every splat toward a dark warm,
@@ -90,7 +96,9 @@ export function initLighting(): Lighting {
 
     const coreHelper = new THREE.Mesh(
         new THREE.SphereGeometry(CORE_RADIUS, 16, 16),
-        new THREE.MeshBasicMaterial({ wireframe: true, color: core.color, depthTest: false }),
+        // transparent + depthTest:false + high renderOrder → draws in the transparent
+        // pass after the splats, so the wireframe sits on top of everything.
+        new THREE.MeshBasicMaterial({ wireframe: true, color: core.color, depthTest: false, depthWrite: false, transparent: true }),
     );
     coreHelper.position.copy(LIGHT_ORIGIN);
     coreHelper.visible = false;
@@ -115,7 +123,8 @@ export function initLighting(): Lighting {
 
     const ambientHelper = new THREE.Mesh(
         new THREE.SphereGeometry(AMBIENT_RADIUS, 16, 16),
-        new THREE.MeshBasicMaterial({ wireframe: true, color: ambient.color, depthTest: false }),
+        // transparent for the same reason as coreHelper — draws on top of the splats.
+        new THREE.MeshBasicMaterial({ wireframe: true, color: ambient.color, depthTest: false, depthWrite: false, transparent: true }),
     );
     ambientHelper.position.copy(LIGHT_ORIGIN);
     ambientHelper.visible = false;
@@ -123,8 +132,9 @@ export function initLighting(): Lighting {
     ambientHelper.frustumCulled = false;
     ambientHelper.raycast = () => {};
 
-    const pointLight = new THREE.PointLight(POINT_LIGHT_COLOR, POINT_LIGHT_REST);
+    const pointLight = new THREE.PointLight(POINT_LIGHT_COLOR, POINT_LIGHT_REST, POINT_LIGHT_DISTANCE, POINT_LIGHT_DECAY);
     pointLight.position.copy(LIGHT_ORIGIN);
+    pointLight.position.y += POINT_LIGHT_HEIGHT;
 
     return { coreLayer, core, coreHelper, ambientLayer, ambient, ambientHelper, pointLight };
 }

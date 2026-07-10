@@ -27,6 +27,19 @@ export function initBehavior(): Behavior {
     return { tasks: new Map() };
 }
 
+// Snap carried coal to its carrier's transform. Must run after the physics step:
+// positioning it in updateBehavior (pre-step) leaves it a frame behind the creature,
+// which reads as jitter. The arm grip target set pre-step can stay a frame stale —
+// a noodly arm hides it, but the rigid coal wouldn't.
+export function updateCarriedCoal(behavior: Behavior, physics: Physics): void {
+    for (const [creature, task] of behavior.tasks) {
+        const c = task.coal;
+        if (task.state !== 'carry' || c?.state !== 'carried') continue;
+        getCreatureCarryPoint(creature, c.radius, _carry);
+        holdCoalAt(physics.world, c, _carry, creature.quaternion);
+    }
+}
+
 const GRAB_RADIUS = 0.13; // must be ~on top of the coal to grab it (else it looks force-pulled)
 const GRAB_DURATION = 0.45; // seconds to lift a coal from the ground to overhead
 const ARRIVE = 0.18; // crowd "arrived at dropoff" threshold

@@ -105,6 +105,9 @@ export function initCoal(): CoalSystem {
     const mesh = new THREE.BatchedMesh(MAX_COAL, maxVerts, maxIndices, material);
     mesh.perObjectFrustumCulled = false;
     mesh.frustumCulled = false;
+    // Cast and receive the furnace shadows.
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     const geoIds = COAL_SHAPES.map(({ geometry }) => mesh.addGeometry(geometry));
 
     return { mesh, geoIds, list: [] };

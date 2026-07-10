@@ -2,20 +2,21 @@ import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { initBehavior, updateBehavior } from './behavior';
+import { initBehavior, updateBehavior, updateCarriedCoal } from './behavior';
 import { initCoal, spawnCoalClump, updateCoal } from './coal';
 import { type Collider, unpackCollider } from './collider-schema';
 import { initCreatures, spawnCreatures, updateCreaturesPostStep, updateCreaturesPreStep } from './creatures';
-import { attachDebugRaycast, createDebugOverlay, updateDebugOverlay, updatePhysicsDebug } from './debug';
+import { attachDebugRaycast, attachShadowDebug, createDebugOverlay, updateDebugOverlay, updatePhysicsDebug } from './debug';
 import { initDust } from './dust';
-import { initFurnace, updateFurnace } from './furnace';
+import { furnaceHeat, initFurnace, updateFurnace } from './furnace';
 import { initHeat, updateHeat } from './heat';
 import { attachInteraction } from './interaction';
 import { initLighting, updateLighting } from './lighting';
-import { initNavigation, loadNavigation, updateCrowd, updateNavigation } from './navigation';
+import { initNavigation, loadNavigation, updateAgentDebug, updateCrowd, updateNavigation } from './navigation';
 import { applyPerformance, initPerformance } from './performance';
 import { createSplatCollider, initPhysics, updatePhysics } from './physics';
 import { CAMERA_POSITION, CAMERA_TARGET, CLUMP, COAL_COUNT, COLLIDER_URL, SPLAT_URL } from './scene';
+import { attachShadowCatcher, initShadows, updateShadows } from './shadows';
 import { initSparks, updateSparks } from './sparks';
 import './style.css';
 
@@ -90,6 +91,10 @@ function init() {
     scene.add(lighting.ambientHelper);
     scene.add(lighting.pointLight);
 
+    // Cast creature shadows from the furnace point light; the catcher is attached in load().
+    const shadows = initShadows(renderer, lighting.pointLight);
+    attachShadowDebug(debug, scene, lighting.pointLight);
+
     const dust = initDust();
     scene.add(dust.mesh);
 
@@ -126,6 +131,7 @@ function init() {
         navigation,
         furnace,
         lighting,
+        shadows,
         heat,
         dust,
         creatures,
@@ -157,6 +163,9 @@ async function load(state: State) {
     // Add the scene geometry to the physics world as a static triangle mesh.
     createSplatCollider(state.physics, state.collider);
 
+    // The collider doubles as the shadow catcher — splats can't receive shadows themselves.
+    attachShadowCatcher(state.scene, state.collider, state.shadows);
+
     // Drop the initial coal pile on the clump (needs the collider to land on).
     spawnCoalClump(state.coal, state.physics, CLUMP, COAL_COUNT);
 
@@ -184,15 +193,19 @@ function update(state: State, dt: number, time: number) {
     updateCreaturesPreStep(state.creatures, state.navigation, state.physics, dt);
     updatePhysics(state.physics, dt);
     updateCreaturesPostStep(state.creatures, state.physics, dt);
+    updateCarriedCoal(state.behavior, state.physics);
     updateCoal(state.coal, state.physics, dt);
     updateSparks(state.sparks, dt);
     state.controls.update();
     updateLighting(state.lighting, state.furnace, time, state.debug.showLights);
+    // Lighten the shadows as the fire's diffuse fill washes into them.
+    updateShadows(state.shadows, furnaceHeat(state.furnace));
     updateHeat(state.heat, state.furnace);
     applyPerformance(state.perf, state.spark);
     updateDebugOverlay(state.debug, state.camera, state.controls, state.furnace, state.spark);
     updatePhysicsDebug(state.debug, state.physics.world);
     updateNavigation(state.navigation, state.scene, state.debug.showNavMesh);
+    updateAgentDebug(state.navigation, state.scene, state.debug.showAgents);
     state.renderer.render(state.scene, state.camera);
 }
 

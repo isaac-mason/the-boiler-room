@@ -104,6 +104,9 @@ const AGENT_RADIUS = 0.05;
 export const AGENT_MAX_SPEED = 0.28; // unburdened pace; carrying slows them further
 const GROUND_RAY_UP = 0.3; // ground ray starts this far above the agent's navmesh Y
 const GROUND_RAY_LEN = 1.2;
+const GROUND_SMOOTH = 14; // per-sec low-pass on the ride height. The splat collider is
+// bumpy, so a raw per-frame ground ray jitters the body; feet still IK to the true
+// ground, so smoothing only the body height costs no contact accuracy.
 const ARRIVE_THRESHOLD = 0.15; // crowd "at target" distance
 const TURN_RATE = 8; // how fast the body yaws toward its heading (per second, slerp fraction)
 const TURN_MIN_SPEED = 0.02; // below this speed, keep the current facing (don't spin in place)
@@ -245,6 +248,7 @@ export type Creature = {
     stepCycleTime: number;
     bobPhase: number; // body-bob phase (0..1); advances at a capped cadence so it never gets frantic
     grounded: boolean;
+    smoothGroundY: number; // low-passed ground height — damps per-frame ray noise (NaN until first hit)
     legs: LimbState[];
     arms: LimbState[];
     eyes: Eye[];
@@ -370,6 +374,9 @@ export function initCreatures(physics: Physics): Creatures {
     const mesh = new THREE.BatchedMesh(maxInstances, maxVerts, maxIndices, material);
     mesh.perObjectFrustumCulled = false; // instances animate every frame
     mesh.frustumCulled = false;
+    // Cast and receive the furnace shadows (creatures self-shadow and shadow each other).
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
 
     const geo = {
         body: mesh.addGeometry(bodyGeo),
@@ -467,6 +474,7 @@ export function spawnCreatures(creatures: Creatures, physics: Physics, navigatio
             stepCycleTime: Math.random(),
             bobPhase: Math.random(),
             grounded: false,
+            smoothGroundY: NaN,
             legs,
             arms,
             eyes,
@@ -501,6 +509,13 @@ function driveKinematic(creature: Creature, world: World, navigation: Navigation
         groundY = origin[1] - groundCollector.hit.fraction * GROUND_RAY_LEN;
         grounded = true;
     }
+
+    // Low-pass the ride height so the bumpy collider's per-frame ray noise doesn't
+    // jitter the body (snap to the first sample to avoid a startup pop).
+    creature.smoothGroundY = Number.isNaN(creature.smoothGroundY)
+        ? groundY
+        : creature.smoothGroundY + (groundY - creature.smoothGroundY) * Math.min(dt * GROUND_SMOOTH, 1);
+    groundY = creature.smoothGroundY;
 
     // Turn to face the direction of travel (yaw around Y), slerping smoothly.
     const vx = agent.velocity[0];
