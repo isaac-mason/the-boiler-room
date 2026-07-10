@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { OBJECT_LAYER_GHOST, OBJECT_LAYER_MOVING, type Physics } from './physics';
+import { CLUMP } from './scene';
 
 const SHAPE_COUNT = 6; // distinct deterministic lumps
 const POINTS_PER_HULL = 14;
@@ -17,6 +18,13 @@ const COAL_SIZE_MIN = 0.6; // per-coal scale range — some small, some quite bi
 const COAL_SIZE_MAX = 1.8;
 const MAX_COAL = 48; // BatchedMesh instance budget
 const CLUMP_JITTER = 0.06;
+
+// Recycle stuck coal: a loose lump that's strayed from the clump and sat untouched
+// this long gets teleported back to the pile so it's reachable again (the pile
+// itself is left alone via the distance guard).
+const COAL_RECYCLE_TIME = 30; // seconds loose + stray before recycling
+const COAL_STUCK_DIST = 0.5; // only recycle coal that's strayed at least this far from the clump
+const COAL_RECYCLE_DROP_Y = 0.2; // drop height above the clump on recycle
 
 const COLOR_COAL = new THREE.Color(0x18181b);
 
@@ -69,6 +77,7 @@ export type Coal = {
     state: CoalState;
     size: number; // scale factor (physics + render); bigger = heavier to carry
     radius: number; // world-space radius (COAL_RADIUS × size) — for accurate carrying
+    idleTime: number; // seconds spent loose (reset when carried/thrown) — recycled past COAL_RECYCLE_TIME
 };
 
 export type CoalSystem = {
@@ -80,6 +89,8 @@ export type CoalSystem = {
 const _m4 = mat4.create();
 const _m4three = new THREE.Matrix4();
 const _scale: Vec3 = [1, 1, 1];
+const _recyclePos: Vec3 = [0, 0, 0];
+const IDENTITY_QUAT: Quat = [0, 0, 0, 1];
 
 export function initCoal(): CoalSystem {
     const material = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0.15 });
@@ -117,7 +128,7 @@ export function spawnCoal(coal: CoalSystem, physics: Physics, position: Vec3): C
     const instance = coal.mesh.addInstance(coal.geoIds[shapeIndex]);
     coal.mesh.setColorAt(instance, COLOR_COAL);
 
-    const c: Coal = { body, shapeIndex, instance, state: 'loose', size, radius: COAL_RADIUS * size };
+    const c: Coal = { body, shapeIndex, instance, state: 'loose', size, radius: COAL_RADIUS * size, idleTime: 0 };
     coal.list.push(c);
     return c;
 }
@@ -182,9 +193,28 @@ export function pushCoal(world: World, c: Coal, velocity: Vec3): void {
 }
 
 // Sync instance transforms from the bodies (post-physics). Carried coal is
-// teleported by holdCoalAt, so its body transform is current too.
-export function updateCoal(coal: CoalSystem): void {
+// teleported by holdCoalAt, so its body transform is current too. Also recycles
+// stuck loose coal back to the clump (see COAL_RECYCLE_TIME).
+export function updateCoal(coal: CoalSystem, physics: Physics, dt: number): void {
     for (const c of coal.list) {
+        if (c.state === 'loose') {
+            c.idleTime += dt;
+            const dx = c.body.position[0] - CLUMP[0];
+            const dz = c.body.position[2] - CLUMP[2];
+            const strayed = dx * dx + dz * dz > COAL_STUCK_DIST * COAL_STUCK_DIST;
+            if (c.idleTime > COAL_RECYCLE_TIME && strayed) {
+                _recyclePos[0] = CLUMP[0] + (Math.random() * 2 - 1) * CLUMP_JITTER;
+                _recyclePos[1] = CLUMP[1] + COAL_RADIUS + COAL_RECYCLE_DROP_Y;
+                _recyclePos[2] = CLUMP[2] + (Math.random() * 2 - 1) * CLUMP_JITTER;
+                rigidBody.setTransform(physics.world, c.body, _recyclePos, IDENTITY_QUAT, true);
+                rigidBody.setLinearVelocity(physics.world, c.body, [0, 0, 0]);
+                rigidBody.setAngularVelocity(physics.world, c.body, [0, 0, 0]);
+                c.idleTime = 0;
+            }
+        } else {
+            c.idleTime = 0; // carried/thrown coal isn't stuck
+        }
+
         _scale[0] = c.size;
         _scale[1] = c.size;
         _scale[2] = c.size;
